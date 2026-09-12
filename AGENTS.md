@@ -188,3 +188,7 @@ When implementation is authorized:
 5. report the exact changed files/functions, evidence, and any remaining semantic uncertainty.
 
 A technically passing implementation that violates the lifecycle invariant is not acceptable.
+
+## Commits
+
+Push commits when complete.
