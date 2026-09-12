@@ -21,10 +21,10 @@ issue inside the workspace.
 
 The service solves four operational problems:
 
-- It turns issue execution into a repeatable daemon instance_config instead of manual scripts.
+- It turns issue execution into a repeatable daemon workflow instead of manual scripts.
 - It isolates agent execution in per-issue workspaces so agent commands run only inside per-issue
   workspace directories.
-- It keeps the instance_config policy in-repo (`instance_config.yml`) so teams version the agent prompt and runtime
+- It keeps the workflow policy in-repo (`WORKFLOW.md`) so teams version the agent prompt and runtime
   settings with their code.
 - It provides enough observability to operate and debug multiple concurrent agent runs.
 
@@ -40,7 +40,7 @@ Important boundary:
   through provider-native tools executed by Symphony with the configured tracker credential.
 - When tracker credentials are supplied through host-side secret references, the coding-agent child
   process does not need a duplicate tracker login or direct access to raw tracker credentials.
-- A successful run can end at a instance_config-defined handoff state (for example `Human Review`), not
+- A successful run can end at a workflow-defined handoff state (for example `Human Review`), not
   necessarily `Done`.
 
 ## 2. Goals and Non-Goals
@@ -52,7 +52,7 @@ Important boundary:
 - Create deterministic per-issue workspaces and preserve them across runs.
 - Stop active runs when issue state changes make them ineligible.
 - Recover from transient failures with exponential backoff.
-- Load runtime behavior from a repository-owned `instance_config.yml` contract.
+- Load runtime behavior from a repository-owned `WORKFLOW.md` contract.
 - Expose operator-visible observability (at minimum structured logs).
 - Support tracker/filesystem-driven restart recovery without requiring a persistent database; exact
   in-memory scheduler state is not restored.
@@ -61,9 +61,9 @@ Important boundary:
 
 - Rich web UI or multi-tenant control plane.
 - Prescribing a specific dashboard or terminal UI implementation.
-- General-purpose instance_config engine or distributed job scheduler.
+- General-purpose workflow engine or distributed job scheduler.
 - Built-in business logic for how to edit tickets, PRs, or comments. (That logic lives in the
-  instance_config prompt and agent tooling.)
+  workflow prompt and agent tooling.)
 - Mandating strong sandbox controls beyond what the coding agent and host OS provide.
 - Mandating a single default approval, sandbox, or operator-confirmation posture for all
   implementations.
@@ -72,13 +72,13 @@ Important boundary:
 
 ### 3.1 Main Components
 
-1. `instance_config Loader`
-   - Reads `instance_config.yml`.
+1. `Workflow Loader`
+   - Reads `WORKFLOW.md`.
    - Parses YAML front matter and prompt body.
    - Returns `{config, prompt_template}`.
 
 2. `Config Layer`
-   - Exposes typed getters for instance_config config values.
+   - Exposes typed getters for workflow config values.
    - Applies defaults and environment variable indirection.
    - Performs validation used by the orchestrator before dispatch.
 
@@ -104,7 +104,7 @@ Important boundary:
 
 6. `Agent Runner`
    - Creates workspace.
-   - Builds prompt from issue + instance_config template.
+   - Builds prompt from issue + workflow template.
    - Launches the coding agent app-server client.
    - Streams agent updates back to the orchestrator.
 
@@ -120,7 +120,7 @@ Important boundary:
 Symphony is easiest to port when kept in these layers:
 
 1. `Policy Layer` (repo-defined)
-   - `instance_config.yml` prompt body.
+   - `WORKFLOW.md` prompt body.
    - Team-specific rules for ticket handling, validation, and handoff.
 
 2. `Configuration Layer` (typed getters)
@@ -196,9 +196,9 @@ Fields:
 - `created_at` (timestamp or null)
 - `updated_at` (timestamp or null)
 
-#### 4.1.2 instance_config Definition
+#### 4.1.2 Workflow Definition
 
-Parsed `instance_config.yml` payload:
+Parsed `WORKFLOW.md` payload:
 
 - `config` (map)
   - YAML front matter root object.
@@ -207,7 +207,7 @@ Parsed `instance_config.yml` payload:
 
 #### 4.1.3 Service Config (Typed View)
 
-Typed runtime values derived from `instance_configDefinition.config` plus environment resolution.
+Typed runtime values derived from `WorkflowDefinition.config` plus environment resolution.
 
 Examples:
 
@@ -315,27 +315,27 @@ Fields:
 - `Session ID`
   - Compose from coding-agent `thread_id` and `turn_id` as `<thread_id>-<turn_id>`.
 
-## 5. instance_config Specification (Repository Contract)
+## 5. Workflow Specification (Repository Contract)
 
 ### 5.1 File Discovery and Path Resolution
 
-instance_config file path precedence:
+Workflow file path precedence:
 
 1. Explicit application/runtime setting (set by CLI startup path).
-2. Default: `instance_config.yml` in the current process working directory.
+2. Default: `WORKFLOW.md` in the current process working directory.
 
 Loader behavior:
 
-- If the file cannot be read, return `missing_instance_config_file` error.
-- The instance_config file is expected to be repository-owned and version-controlled.
+- If the file cannot be read, return `missing_workflow_file` error.
+- The workflow file is expected to be repository-owned and version-controlled.
 
 ### 5.2 File Format
 
-`instance_config.yml` is a Markdown file with OPTIONAL YAML front matter.
+`WORKFLOW.md` is a Markdown file with OPTIONAL YAML front matter.
 
 Design note:
 
-- `instance_config.yml` SHOULD be self-contained enough to describe and run different instance_configs (prompt,
+- `WORKFLOW.md` SHOULD be self-contained enough to describe and run different workflows (prompt,
   runtime settings, hooks, and tracker selection/config) without requiring out-of-band
   service-specific configuration.
 
@@ -347,7 +347,7 @@ Parsing rules:
 - YAML front matter MUST decode to a map/object; non-map YAML is an error.
 - Prompt body is trimmed before use.
 
-Returned instance_config object:
+Returned workflow object:
 
 - `config`: front matter root object (not nested under a `config` key).
 - `prompt_template`: trimmed Markdown body.
@@ -367,7 +367,7 @@ Unknown keys SHOULD be ignored for forward compatibility.
 
 Note:
 
-- The instance_config front matter is extensible. Extensions MAY define additional top-level keys without
+- The workflow front matter is extensible. Extensions MAY define additional top-level keys without
   changing the core schema above.
 - Extensions SHOULD document their field schema, defaults, validation rules, and whether changes
   apply dynamically or require restart.
@@ -414,7 +414,7 @@ Fields:
 - `root` (path string or `$VAR`)
   - Default: `<system-temp>/symphony_workspaces`
   - `~` is expanded.
-  - Relative paths are resolved relative to the directory containing `instance_config.yml`.
+  - Relative paths are resolved relative to the directory containing `WORKFLOW.md`.
   - The effective workspace root is normalized to an absolute path before use.
 
 #### 5.3.4 `hooks` (object)
@@ -492,7 +492,7 @@ fields locally if they want stricter startup checks.
 
 ### 5.4 Prompt Template Contract
 
-The Markdown body of `instance_config.yml` is the per-issue prompt template.
+The Markdown body of `WORKFLOW.md` is the per-issue prompt template.
 
 Rendering requirements:
 
@@ -510,24 +510,24 @@ Template input variables:
 
 Fallback prompt behavior:
 
-- If the instance_config prompt body is empty, the runtime MAY use a minimal default prompt
+- If the workflow prompt body is empty, the runtime MAY use a minimal default prompt
   (`You are working on an issue from the configured tracker.`).
-- instance_config file read/parse failures are configuration/validation errors and SHOULD NOT silently fall
+- Workflow file read/parse failures are configuration/validation errors and SHOULD NOT silently fall
   back to a prompt.
 
-### 5.5 instance_config Validation and Error Surface
+### 5.5 Workflow Validation and Error Surface
 
 Error classes:
 
-- `missing_instance_config_file`
-- `instance_config_parse_error`
-- `instance_config_front_matter_not_a_map`
+- `missing_workflow_file`
+- `workflow_parse_error`
+- `workflow_front_matter_not_a_map`
 - `template_parse_error` (during prompt rendering)
 - `template_render_error` (unknown variable/filter, invalid interpolation)
 
 Dispatch gating behavior:
 
-- instance_config file read/YAML errors block new dispatches until fixed.
+- Workflow file read/YAML errors block new dispatches until fixed.
 - Template errors fail only the affected run attempt.
 
 ## 6. Configuration Specification
@@ -536,7 +536,7 @@ Dispatch gating behavior:
 
 Configuration is resolved in this order:
 
-1. Select the instance_config file path (explicit runtime setting, otherwise cwd default).
+1. Select the workflow file path (explicit runtime setting, otherwise cwd default).
 2. Parse YAML front matter into a raw config map.
 3. Apply built-in defaults for missing OPTIONAL fields.
 4. Resolve `$VAR_NAME` indirection for config values that explicitly contain `$VAR_NAME`, plus any
@@ -555,14 +555,14 @@ Value coercion semantics:
   - Apply expansion only to values intended to be local filesystem paths; do not rewrite URIs or
     arbitrary shell command strings.
 - Relative `workspace.root` values resolve relative to the directory containing the selected
-  `instance_config.yml`.
+  `WORKFLOW.md`.
 
 ### 6.2 Dynamic Reload Semantics
 
 Dynamic reload is REQUIRED:
 
-- The software MUST detect `instance_config.yml` changes.
-- On change, it MUST re-read and re-apply instance_config config and prompt template without restart.
+- The software MUST detect `WORKFLOW.md` changes.
+- On change, it MUST re-read and re-apply workflow config and prompt template without restart.
 - The software MUST attempt to adjust live behavior to the new config (for example polling
   cadence, concurrency limits, active/terminal states, codex settings, workspace paths/hooks, and
   prompt content for future runs).
@@ -580,7 +580,7 @@ Dynamic reload is REQUIRED:
 ### 6.3 Dispatch Preflight Validation
 
 This validation is a scheduler preflight run before attempting to dispatch new work. It validates
-the instance_config/config needed to poll and launch workers, not a full audit of all possible instance_config
+the workflow/config needed to poll and launch workers, not a full audit of all possible workflow
 behavior.
 
 Startup validation:
@@ -596,7 +596,7 @@ Per-tick dispatch validation:
 
 Validation checks:
 
-- instance_config file can be loaded and parsed.
+- Workflow file can be loaded and parsed.
 - `tracker.kind` is present and supported.
 - The selected adapter accepts `tracker.provider` after documented defaults and `$VAR`
   resolution.
@@ -737,7 +737,7 @@ Distinct terminal reasons are important because retry logic and logs differ.
 At startup, the service validates config, performs startup cleanup, schedules an immediate tick, and
 then repeats every `polling.interval_ms`.
 
-The effective poll interval SHOULD be updated when instance_config config changes are re-applied.
+The effective poll interval SHOULD be updated when workflow config changes are re-applied.
 
 Tick sequence:
 
@@ -881,7 +881,7 @@ Algorithm summary:
 
 Notes:
 
-- This section does not assume any specific repository/VCS instance_config.
+- This section does not assume any specific repository/VCS workflow.
 - Workspace preparation beyond directory creation (for example dependency bootstrap, checkout/sync,
   code generation) is implementation-defined and is typically handled via hooks.
 
@@ -1094,7 +1094,7 @@ Optional provider-native agent tool extension:
 - The selected adapter's tool specs SHOULD be advertised during session startup using the protocol
   mechanism supported by the targeted Codex app-server version.
 - Tool specs, adapter selection, and effective tracker settings MUST be bound to one session
-  snapshot. A instance_config reload applies to future sessions; it MUST NOT make an in-flight session
+  snapshot. A workflow reload applies to future sessions; it MUST NOT make an in-flight session
   advertise one provider and execute another.
 - Tool names, schemas, and result payloads are adapter-owned. Symphony does not standardize a
   lowest-common-denominator CRUD API.
@@ -1108,7 +1108,7 @@ Optional provider-native agent tool extension:
   resolves credentials from environment variables MUST declare authentication-related environment
   names for removal from local and remote child environments. Implementations SHOULD consult current
   provider and client documentation when identifying credential names and aliases, as these can
-  change over time. Literal credentials in a repo-owned `instance_config.yml` remain readable to a child
+  change over time. Literal credentials in a repo-owned `WORKFLOW.md` remain readable to a child
   with workspace access and SHOULD NOT be used when this isolation matters.
 - Unsupported tool names MUST return a structured failure result using the targeted protocol and
   continue the session.
@@ -1167,7 +1167,7 @@ The `Agent Runner` wraps workspace + prompt + app-server client.
 Behavior:
 
 1. Create/reuse workspace for issue.
-2. Build prompt from instance_config template.
+2. Build prompt from workflow template.
 3. Start app-server session.
 4. Forward app-server events to orchestrator.
 5. On any error, fail the worker attempt (the orchestrator will retry).
@@ -1318,7 +1318,7 @@ Symphony does not require first-class tracker write APIs in the orchestrator.
 - The current normalized issue is available to tool execution as context, including opaque
   `native_ref`, so adapters can retain provider richness without adding it to the core scheduler.
 - The service remains a scheduler/runner and tracker reader.
-- instance_config-specific success often means "reached the next handoff state" (for example
+- Workflow-specific success often means "reached the next handoff state" (for example
   `Human Review`) rather than tracker terminal state `Done`.
 
 ## 12. Prompt Construction and Context Assembly
@@ -1327,7 +1327,7 @@ Symphony does not require first-class tracker write APIs in the orchestrator.
 
 Inputs to prompt rendering:
 
-- `instance_config.prompt_template`
+- `workflow.prompt_template`
 - normalized `issue` object
 - OPTIONAL `attempt` integer (retry/continuation metadata)
 
@@ -1346,7 +1346,7 @@ Inputs to prompt rendering:
 - any later run: `attempt` is an integer.
 
 The core `attempt` value does not distinguish a normal continuation from an error/timeout/stall
-retry. An implementation MAY expose an additional `retry_kind` template field if instance_configs need
+retry. An implementation MAY expose an additional `retry_kind` template field if workflows need
 that distinction, but it is not part of core conformance.
 
 ### 12.4 Failure Semantics
@@ -1477,7 +1477,7 @@ Extension config:
 Enablement (extension):
 
 - Start the HTTP server when a CLI `--port` argument is provided.
-- Start the HTTP server when `server.port` is present in `instance_config.yml` front matter.
+- Start the HTTP server when `server.port` is present in `WORKFLOW.md` front matter.
 - The `server` top-level key is owned by this extension.
 - Positive `server.port` values bind that port.
 - Implementations SHOULD bind loopback by default (`127.0.0.1` or host equivalent) unless explicitly
@@ -1635,8 +1635,8 @@ API design notes:
 
 ### 14.1 Failure Classes
 
-1. `instance_config/Config Failures`
-   - Missing `instance_config.yml`
+1. `Workflow/Config Failures`
+   - Missing `WORKFLOW.md`
    - Invalid YAML front matter
    - Unsupported tracker kind or invalid adapter-owned tracker configuration
    - Missing coding-agent executable
@@ -1707,14 +1707,14 @@ After restart:
 
 Operators can control behavior by:
 
-- Editing `instance_config.yml` (prompt and most runtime settings).
-- `instance_config.yml` changes are detected and re-applied automatically without restart according to
+- Editing `WORKFLOW.md` (prompt and most runtime settings).
+- `WORKFLOW.md` changes are detected and re-applied automatically without restart according to
   Section 6.2.
 - Changing issue states in the tracker:
   - terminal state -> running session is stopped and workspace cleaned when reconciled
   - non-active state -> running session is stopped without cleanup
 - Restarting the service for process recovery or deployment (not as the normal path for applying
-  instance_config config changes).
+  workflow config changes).
 
 ## 15. Security and Operational Safety
 
@@ -1747,19 +1747,19 @@ RECOMMENDED additional hardening for ports:
 
 ### 15.3 Secret Handling
 
-- Support `$VAR` indirection in instance_config config.
+- Support `$VAR` indirection in workflow config.
 - Do not log API tokens or secret env values.
 - Validate presence of secrets without printing them.
 - Execute provider-native tracker tools in the Symphony host process with the configured adapter
   credential.
 - Do not pass tracker credentials through the coding-agent child environment. Adapters MUST declare
   secret environment names so local and remote launchers can remove them from child environments.
-- Do not place literal tracker credentials in a repo-owned `instance_config.yml` when the child can read
+- Do not place literal tracker credentials in a repo-owned `WORKFLOW.md` when the child can read
   that workspace; use host-side secret references instead.
 
 ### 15.4 Hook Script Safety
 
-Workspace hooks are arbitrary shell scripts from `instance_config.yml`.
+Workspace hooks are arbitrary shell scripts from `WORKFLOW.md`.
 
 Implications:
 
@@ -1778,7 +1778,7 @@ harmful commands or use overly-powerful integrations.
 Implementations SHOULD explicitly evaluate their own risk profile and harden the execution harness
 where appropriate. This specification intentionally does not mandate a single hardening posture, but
 implementations SHOULD NOT assume that tracker data, repository contents, prompt inputs, or tool
-arguments are fully trustworthy just because they originate inside a normal instance_config.
+arguments are fully trustworthy just because they originate inside a normal workflow.
 
 Possible hardening measures include:
 
@@ -1791,7 +1791,7 @@ Possible hardening measures include:
 - Narrowing provider-native tools so they can only read or mutate data inside the intended tracker
   scope, rather than exposing general workspace-wide tracker access.
 - Reducing the set of client-side tools, credentials, filesystem paths, and network destinations
-  available to the agent to the minimum needed for the instance_config.
+  available to the agent to the minimum needed for the workflow.
 
 The correct controls are deployment-specific, but implementations SHOULD document them clearly and
 treat harness hardening as part of the core safety model rather than an optional afterthought.
@@ -1804,7 +1804,7 @@ treat harness hardening as part of the core safety model rather than an optional
 function start_service():
   configure_logging()
   start_observability_outputs()
-  start_instance_config_watch(on_change=reload_and_reapply_instance_config)
+  start_workflow_watch(on_change=reload_and_reapply_workflow)
 
   state = {
     poll_interval_ms: get_config_poll_interval_ms(),
@@ -1949,7 +1949,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   turn_number = 1
 
   while true:
-    prompt = build_turn_prompt(instance_config_template, issue, attempt, turn_number, max_turns)
+    prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
     if prompt failed:
       app_server.stop_session(session)
       run_hook_best_effort("after_run", workspace.path)
@@ -2062,15 +2062,15 @@ Validation profiles:
 Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bullets that begin with
 `If ... is implemented` are `Extension Conformance`.
 
-### 17.1 instance_config and Config Parsing
+### 17.1 Workflow and Config Parsing
 
-- instance_config file path precedence:
+- Workflow file path precedence:
   - explicit runtime path is used when provided
-  - cwd default is `instance_config.yml` when no explicit runtime path is provided
-- instance_config file changes are detected and trigger re-read/re-apply without restart
-- Invalid instance_config reload keeps last known good effective configuration and emits an
+  - cwd default is `WORKFLOW.md` when no explicit runtime path is provided
+- Workflow file changes are detected and trigger re-read/re-apply without restart
+- Invalid workflow reload keeps last known good effective configuration and emits an
   operator-visible error
-- Missing `instance_config.yml` returns typed error
+- Missing `WORKFLOW.md` returns typed error
 - Invalid YAML front matter returns typed error
 - Front matter non-map returns typed error
 - Config defaults apply when OPTIONAL values are missing
@@ -2181,9 +2181,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 
 ### 17.7 CLI and Host Lifecycle
 
-- CLI accepts a positional instance_config path argument (`path-to-instance_config.yml`)
-- CLI uses `./instance_config.yml` when no instance_config path argument is provided
-- CLI errors on nonexistent explicit instance_config path or missing default `./instance_config.yml`
+- CLI accepts a positional workflow path argument (`path-to-WORKFLOW.md`)
+- CLI uses `./WORKFLOW.md` when no workflow path argument is provided
+- CLI errors on nonexistent explicit workflow path or missing default `./WORKFLOW.md`
 - CLI surfaces startup failure cleanly
 - CLI exits with success when application starts and shuts down normally
 - CLI exits nonzero when startup fails or the host process exits abnormally
@@ -2211,10 +2211,10 @@ Use the same validation profiles as Section 17:
 
 ### 18.1 REQUIRED for Conformance
 
-- instance_config path selection supports explicit runtime path and cwd default
-- `instance_config.yml` loader with YAML front matter + prompt body split
+- Workflow path selection supports explicit runtime path and cwd default
+- `WORKFLOW.md` loader with YAML front matter + prompt body split
 - Typed config layer with defaults and `$` resolution
-- Dynamic `instance_config.yml` watch/reload/re-apply for config and prompt
+- Dynamic `WORKFLOW.md` watch/reload/re-apply for config and prompt
 - Polling orchestrator with single-authority mutable state
 - Issue tracker adapter with state-list + ID-refresh reads
 - Workspace manager with sanitized, collision-resistant per-issue workspaces
@@ -2237,7 +2237,7 @@ Use the same validation profiles as Section 17:
 - Provider-native agent tools, when shipped, execute through the app-server session using
   host-side configured adapter auth without passing tracker secrets to the child.
 - TODO: Persist retry queue and session metadata across process restarts.
-- TODO: Make observability settings configurable in instance_config front matter without prescribing UI
+- TODO: Make observability settings configurable in workflow front matter without prescribing UI
   implementation details.
 - TODO: Extract common semantic helper tools only after multiple adapters demonstrate real
   duplication; do not preemptively replace provider-native tools with generic CRUD.
@@ -2245,7 +2245,7 @@ Use the same validation profiles as Section 17:
 ### 18.3 Operational Validation Before Production (RECOMMENDED)
 
 - Run the `Real Integration Profile` from Section 17.8 with valid credentials and network access.
-- Verify hook execution and instance_config path resolution on the target host OS/shell environment.
+- Verify hook execution and workflow path resolution on the target host OS/shell environment.
 - If the OPTIONAL HTTP server is shipped, verify the configured port behavior and loopback/default
   bind expectations on the target environment.
 

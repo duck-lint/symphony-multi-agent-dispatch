@@ -74,7 +74,9 @@ If not, leave it alone unless required for safety.
 
 SYMPHONY is one reusable orchestration implementation that can be used across arbitrary target repositories without source-code modification.
 
-Each running Symphony instance is scoped to one target project through that project's workflow configuration. A target repository may carry project-local Symphony configuration such as `.symphony/WORKFLOW.md`.
+Each running Symphony instance is scoped to one target project through that project's project-local `instance_config.yml`. This file binds/configures one project-scoped runtime instance only; it does not define the shared lifecycle, a PM profile, a role prompt, or lifecycle authority.
+
+The shared multi-role lifecycle belongs to SYMPHONY and is structurally enforced by host code, not expressed as project-specific prompt prose. Dispatched agents read the target repository's applicable `AGENTS.md`, harness, and source context; the orchestrator does not need to reason about that project's domain.
 
 Multiple project-scoped Symphony instances may run concurrently. They remain independent scheduling domains with separate tracker scopes, claim maps, workspaces, and runtime state.
 
