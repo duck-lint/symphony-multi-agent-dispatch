@@ -48,6 +48,7 @@ description:
 12. Commit only when the message matches the staged changes: if the staged diff
     includes unrelated files or the message describes work that isn't staged,
     fix the index or revise the message before committing.
+13. Push the commit 
 
 ## Output
 
