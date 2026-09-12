@@ -5,7 +5,15 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Lifecycle, PMThreadState, PromptBuilder, RoleProfiles, Workspace}
+  alias SymphonyElixir.{
+    Config,
+    Lifecycle,
+    PMThreadState,
+    PromptBuilder,
+    RoleProfiles,
+    RoleRuntimePolicy,
+    Workspace
+  }
   alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
@@ -42,14 +50,33 @@ defmodule SymphonyElixir.AgentRunner do
 
     case Workspace.create_for_issue(issue, worker_host) do
       {:ok, workspace} ->
-        send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
+        with {:ok, role_policy} <- RoleRuntimePolicy.for_role(role, workspace, worker_host: worker_host),
+             {:ok, boundary} <- Workspace.enforce_role_boundary(workspace, role_policy, worker_host) do
+          send_worker_runtime_info(
+            codex_update_recipient,
+            issue,
+            worker_host,
+            workspace,
+            role_policy,
+            boundary
+          )
 
-        try do
-          with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
-            run_role_turn(workspace, issue, codex_update_recipient, opts, worker_host, role, role_profile)
+          try do
+            with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
+              run_role_turn(
+                workspace,
+                issue,
+                codex_update_recipient,
+                opts,
+                worker_host,
+                role,
+                role_profile,
+                role_policy
+              )
+            end
+          after
+            Workspace.run_after_run_hook(workspace, issue, worker_host)
           end
-        after
-          Workspace.run_after_run_hook(workspace, issue, worker_host)
         end
 
       {:error, reason} ->
@@ -71,25 +98,45 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_codex_update(_recipient, _issue, _message), do: :ok
 
-  defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, worker_host, workspace)
-       when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) do
+  defp send_worker_runtime_info(
+         recipient,
+         %Issue{id: issue_id},
+         worker_host,
+         workspace,
+         role_policy,
+         boundary
+       )
+       when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) and is_map(role_policy) and
+              is_map(boundary) do
     send(
       recipient,
       {:worker_runtime_info, issue_id,
        %{
          worker_host: worker_host,
-         workspace_path: workspace
+         workspace_path: workspace,
+         authority_snapshot:
+           RoleRuntimePolicy.snapshot(role_policy)
+           |> Map.put(:git_metadata_boundary, boundary.git_metadata_protection)
        }}
     )
 
     :ok
   end
 
-  defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+  defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace, _role_policy, _boundary), do: :ok
 
-  defp run_role_turn(workspace, issue, codex_update_recipient, opts, worker_host, role, role_profile) do
+  defp run_role_turn(
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         worker_host,
+         role,
+         role_profile,
+         role_policy
+       ) do
     with {:ok, thread_selection} <- resolve_thread_selection(issue, role, opts),
-         {:ok, session} <- start_role_session(workspace, worker_host, thread_selection) do
+         {:ok, session} <- start_role_session(workspace, worker_host, thread_selection, role_policy) do
       try do
         with :ok <- persist_new_pm_thread(issue, thread_selection, session) do
           case run_role_turn_with_session(
@@ -99,7 +146,8 @@ defmodule SymphonyElixir.AgentRunner do
                  codex_update_recipient,
                  opts,
                  role,
-                 role_profile
+                 role_profile,
+                 role_policy
                ) do
             {:ok, turn_session} ->
               send_role_execution_completed(
@@ -129,7 +177,8 @@ defmodule SymphonyElixir.AgentRunner do
          codex_update_recipient,
          opts,
          role,
-         role_profile
+         role_profile,
+         _role_policy
        ) do
     prompt_context = %{
       role_profile: role_profile,
@@ -189,16 +238,21 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp resolve_thread_selection(%Issue{}, _role, _opts), do: {:ok, %{kind: :specialist}}
 
-  defp start_role_session(workspace, worker_host, %{kind: :specialist}) do
-    AppServer.start_session(workspace, worker_host: worker_host)
+  defp start_role_session(workspace, worker_host, %{kind: :specialist}, role_policy) do
+    AppServer.start_session(workspace, worker_host: worker_host, role: role_policy.role, role_policy: role_policy)
   end
 
-  defp start_role_session(workspace, worker_host, %{kind: :pm, thread_id: nil}) do
-    AppServer.start_session(workspace, worker_host: worker_host)
+  defp start_role_session(workspace, worker_host, %{kind: :pm, thread_id: nil}, role_policy) do
+    AppServer.start_session(workspace, worker_host: worker_host, role: role_policy.role, role_policy: role_policy)
   end
 
-  defp start_role_session(workspace, worker_host, %{kind: :pm, thread_id: thread_id}) do
-    case AppServer.start_session(workspace, worker_host: worker_host, thread_id: thread_id) do
+  defp start_role_session(workspace, worker_host, %{kind: :pm, thread_id: thread_id}, role_policy) do
+    case AppServer.start_session(workspace,
+           worker_host: worker_host,
+           thread_id: thread_id,
+           role: role_policy.role,
+           role_policy: role_policy
+         ) do
       {:ok, session} ->
         {:ok, session}
 

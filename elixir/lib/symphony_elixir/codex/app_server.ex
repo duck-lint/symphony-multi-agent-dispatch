@@ -21,7 +21,9 @@ defmodule SymphonyElixir.Codex.AppServer do
           thread_id: String.t(),
           workspace: Path.t(),
           worker_host: String.t() | nil,
-          dynamic_tool_binding: map()
+          dynamic_tool_binding: map(),
+          role_bound: boolean(),
+          authority_snapshot: map() | nil
         }
 
   @spec run(Path.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -39,33 +41,45 @@ defmodule SymphonyElixir.Codex.AppServer do
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
     requested_thread_id = Keyword.get(opts, :thread_id)
+    role_policy = Keyword.get(opts, :role_policy)
     dynamic_tool_binding = DynamicTool.bind()
+    role_dynamic_tool_binding = effective_dynamic_tool_binding(dynamic_tool_binding, role_policy)
 
-    with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
-         {:ok, port} <- start_port(expanded_workspace, worker_host, dynamic_tool_binding) do
-      metadata = port_metadata(port, worker_host)
-
-      with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
+    with :ok <- validate_role_policy_binding(Keyword.get(opts, :role), role_policy, workspace),
+         {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
+         {:ok, session_policies} <- session_policies(expanded_workspace, worker_host, role_policy),
+         {:ok, port} <- start_port(expanded_workspace, worker_host, role_dynamic_tool_binding) do
+      with
            {:ok, thread_id} <-
              do_start_session(
                port,
                expanded_workspace,
                session_policies,
-               dynamic_tool_binding,
+               role_dynamic_tool_binding,
                requested_thread_id
              ) do
+        metadata =
+          port_metadata(port, worker_host)
+          |> maybe_put_authority_snapshot(role_policy)
+
         {:ok,
          %{
            port: port,
            metadata: metadata,
            approval_policy: session_policies.approval_policy,
-           auto_approve_requests: session_policies.approval_policy == "never",
+           # A role-bound session never turns Codex approval into a second
+           # authority channel. The sandbox is the authority boundary; an
+           # approval request is therefore surfaced as a failed turn.
+           auto_approve_requests:
+             is_nil(role_policy) and session_policies.approval_policy == "never",
            thread_sandbox: session_policies.thread_sandbox,
            turn_sandbox_policy: session_policies.turn_sandbox_policy,
            thread_id: thread_id,
            workspace: expanded_workspace,
            worker_host: worker_host,
-           dynamic_tool_binding: dynamic_tool_binding
+           dynamic_tool_binding: role_dynamic_tool_binding,
+           role_bound: not is_nil(role_policy),
+           authority_snapshot: authority_snapshot(role_policy)
          }}
       else
         {:error, reason} ->
@@ -85,7 +99,8 @@ defmodule SymphonyElixir.Codex.AppServer do
           turn_sandbox_policy: turn_sandbox_policy,
           thread_id: thread_id,
           workspace: workspace,
-          dynamic_tool_binding: dynamic_tool_binding
+          dynamic_tool_binding: dynamic_tool_binding,
+          role_bound: role_bound
         },
         prompt,
         issue,
@@ -94,9 +109,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     on_message = Keyword.get(opts, :on_message, &default_on_message/1)
 
     tool_executor =
-      Keyword.get(opts, :tool_executor, fn tool, arguments ->
-        DynamicTool.execute(tool, arguments, dynamic_tool_binding, issue: issue)
-      end)
+      Keyword.get(opts, :tool_executor, default_tool_executor(dynamic_tool_binding, issue, role_bound))
 
     case start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
       {:ok, turn_id} ->
@@ -303,13 +316,65 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp session_policies(workspace, nil) do
+  defp session_policies(workspace, nil, nil) do
     Config.codex_runtime_settings(workspace)
   end
 
-  defp session_policies(workspace, worker_host) when is_binary(worker_host) do
+  defp session_policies(workspace, worker_host, nil) when is_binary(worker_host) do
     Config.codex_runtime_settings(workspace, remote: true)
   end
+
+  defp session_policies(_workspace, _worker_host, %{thread_sandbox: thread_sandbox, turn_sandbox_policy: turn_sandbox_policy})
+       when is_binary(thread_sandbox) and is_map(turn_sandbox_policy) do
+    {:ok,
+     %{
+       # Approval policy remains a mechanical setting. It cannot widen the
+       # already-bound sandbox policy sent for this role.
+       approval_policy: Config.settings!().codex.approval_policy,
+       thread_sandbox: thread_sandbox,
+       turn_sandbox_policy: turn_sandbox_policy
+     }}
+  end
+
+  defp session_policies(_workspace, _worker_host, _role_policy),
+    do: {:error, :invalid_role_runtime_policy}
+
+  defp effective_dynamic_tool_binding(binding, nil), do: binding
+
+  defp effective_dynamic_tool_binding(binding, _role_policy) when is_map(binding) do
+    # Keep the bound secret names for process scrubbing, but never advertise
+    # or execute provider-native tracker tools from a lifecycle role.
+    Map.put(binding, :tool_specs, [])
+  end
+
+  defp default_tool_executor(_binding, _issue, true) do
+    fn _tool, _arguments -> DynamicTool.disabled_response() end
+  end
+
+  defp default_tool_executor(binding, issue, false) do
+    fn tool, arguments -> DynamicTool.execute(tool, arguments, binding, issue: issue) end
+  end
+
+  defp validate_role_policy_binding(nil, nil, _workspace), do: :ok
+
+  defp validate_role_policy_binding(nil, _role_policy, _workspace),
+    do: {:error, :role_runtime_policy_requires_canonical_role}
+
+  defp validate_role_policy_binding(role, %{role: role} = role_policy, workspace) do
+    SymphonyElixir.RoleRuntimePolicy.validate(role, role_policy, workspace)
+  end
+
+  defp validate_role_policy_binding(_role, _role_policy, _workspace),
+    do: {:error, :role_runtime_policy_mismatch}
+
+  defp maybe_put_authority_snapshot(metadata, nil), do: metadata
+
+  defp maybe_put_authority_snapshot(metadata, role_policy) when is_map(role_policy) do
+    Map.put(metadata, :authority_snapshot, SymphonyElixir.RoleRuntimePolicy.snapshot(role_policy))
+  end
+
+  defp authority_snapshot(nil), do: nil
+  defp authority_snapshot(role_policy), do: SymphonyElixir.RoleRuntimePolicy.snapshot(role_policy)
 
   defp do_start_session(
          port,

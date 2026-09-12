@@ -5,7 +5,7 @@ defmodule SymphonyElixir.GitHub.Adapter do
 
   @behaviour SymphonyElixir.Tracker
 
-  alias SymphonyElixir.GitHub.{AgentTool, Client}
+  alias SymphonyElixir.GitHub.Client
   alias SymphonyElixir.Tracker.Issue
 
   @active_states ["open"]
@@ -36,10 +36,25 @@ defmodule SymphonyElixir.GitHub.Adapter do
   def fetch_issues_by_ids(issue_ids), do: client_module().fetch_issues_by_ids(issue_ids)
 
   @spec agent_tool_specs() :: [map()]
-  def agent_tool_specs, do: AgentTool.tool_specs()
+  def agent_tool_specs, do: []
 
   @spec execute_agent_tool(String.t(), term(), keyword()) :: map()
-  def execute_agent_tool(tool, arguments, opts), do: AgentTool.execute(tool, arguments, opts)
+  def execute_agent_tool(tool, _arguments, _opts) do
+    output =
+      Jason.encode!(%{
+        "error" => %{
+          "message" => "GitHub agent tools are disabled for SYMPHONY lifecycle roles.",
+          "tool" => tool,
+          "supportedTools" => []
+        }
+      })
+
+    %{
+      "success" => false,
+      "output" => output,
+      "contentItems" => [%{"type" => "inputText", "text" => output}]
+    }
+  end
 
   @spec secret_environment_names(map()) :: [String.t()]
   def secret_environment_names(tracker_settings), do: Client.secret_environment_names(tracker_settings)

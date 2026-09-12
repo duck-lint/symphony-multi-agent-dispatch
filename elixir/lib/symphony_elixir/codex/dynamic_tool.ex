@@ -14,4 +14,22 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   def bind do
     Tracker.bind_agent_tools()
   end
+
+  @doc false
+  @spec disabled_response() :: map()
+  def disabled_response do
+    output =
+      Jason.encode!(%{
+        "error" => %{
+          "message" => "Tracker agent tools are disabled for SYMPHONY lifecycle roles.",
+          "supportedTools" => []
+        }
+      })
+
+    %{
+      "success" => false,
+      "output" => output,
+      "contentItems" => [%{"type" => "inputText", "text" => output}]
+    }
+  end
 end

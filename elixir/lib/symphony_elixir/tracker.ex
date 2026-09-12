@@ -54,7 +54,11 @@ defmodule SymphonyElixir.Tracker do
       adapter: adapter,
       tracker_settings: tracker_settings,
       tool_specs: adapter_agent_tool_specs(adapter),
-      secret_environment_names: adapter_secret_environment_names(adapter, tracker_settings)
+      secret_environment_names:
+        (adapter_secret_environment_names(adapter, tracker_settings) ++
+           Map.get(tracker_settings, :secret_environment_names, []))
+        |> Enum.filter(&is_binary/1)
+        |> Enum.uniq()
     }
   end
 

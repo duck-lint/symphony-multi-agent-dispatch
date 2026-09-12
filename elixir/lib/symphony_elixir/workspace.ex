@@ -7,8 +7,49 @@ defmodule SymphonyElixir.Workspace do
   alias SymphonyElixir.{Config, PathSafety, SSH}
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
+  @remote_git_boundary_marker "__SYMPHONY_GIT_BOUNDARY__"
 
   @type worker_host :: String.t() | nil
+
+  @doc """
+  Establishes the filesystem boundary required by an Implementer run.
+
+  A workspace-write Codex sandbox cannot express "write this directory except
+  `.git`". For a local workspace, the authoritative Git directory is therefore
+  moved to a deterministic sibling outside the writable root and `.git` becomes
+  only a pointer. Remote workers use the equivalent shell operation. Failure is
+  returned before Codex is launched.
+  """
+  @spec enforce_role_boundary(Path.t(), map(), worker_host()) ::
+          {:ok, map()} | {:error, term()}
+  def enforce_role_boundary(workspace, %{git_metadata_protection: :required}, nil)
+      when is_binary(workspace) do
+    protect_local_git_metadata(workspace)
+  end
+
+  def enforce_role_boundary(workspace, %{git_metadata_protection: :required}, worker_host)
+      when is_binary(workspace) and is_binary(worker_host) do
+    protect_remote_git_metadata(workspace, worker_host)
+  end
+
+  def enforce_role_boundary(_workspace, %{git_metadata_protection: :not_required}, _worker_host) do
+    {:ok, %{git_metadata_protection: :not_required}}
+  end
+
+  def enforce_role_boundary(_workspace, _policy, _worker_host) do
+    {:error, {:role_workspace_boundary, :invalid_policy}}
+  end
+
+  @doc false
+  @spec protected_git_metadata_path(Path.t()) :: Path.t()
+  def protected_git_metadata_path(workspace) when is_binary(workspace) do
+    key =
+      :crypto.hash(:sha256, Path.expand(workspace))
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 32)
+
+    Path.join([Path.dirname(Path.expand(workspace)), ".symphony-git-metadata", key])
+  end
 
   @spec create_for_issue(map() | String.t() | nil, worker_host()) ::
           {:ok, Path.t()} | {:error, term()}
@@ -158,6 +199,7 @@ defmodule SymphonyElixir.Workspace do
 
   defp remove_local_workspace(workspace) do
     maybe_run_before_remove_hook(workspace, nil)
+    remove_protected_git_metadata(workspace)
     File.rm_rf(workspace)
   end
 
@@ -444,6 +486,195 @@ defmodule SymphonyElixir.Workspace do
     Logger.warning("Workspace hook failed hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} status=#{status} output=#{inspect(sanitized_output)}")
 
     {:error, {:workspace_hook_failed, hook_name, status, output}}
+  end
+
+  defp protect_local_git_metadata(workspace) do
+    git_path = Path.join(Path.expand(workspace), ".git")
+
+    case File.lstat(git_path) do
+      {:error, :enoent} ->
+        {:ok, %{git_metadata_protection: :not_present}}
+
+      {:error, reason} ->
+        {:error, {:role_workspace_boundary, :git_metadata_unreadable, reason}}
+
+      {:ok, %File.Stat{type: :symlink}} ->
+        {:error, {:role_workspace_boundary, :git_metadata_symlink}}
+
+      {:ok, %File.Stat{type: :directory}} ->
+        external_git_dir = protected_git_metadata_path(workspace)
+
+        with :ok <- ensure_external_git_path(external_git_dir, workspace),
+             :ok <- File.mkdir_p(Path.dirname(external_git_dir)),
+             :ok <- move_git_directory(git_path, external_git_dir),
+             :ok <- write_git_pointer(git_path, external_git_dir) do
+          {:ok, %{git_metadata_protection: :externalized}}
+        else
+          {:error, reason} -> {:error, {:role_workspace_boundary, reason}}
+        end
+
+      {:ok, %File.Stat{type: :regular}} ->
+        validate_existing_git_pointer(git_path, workspace)
+
+      {:ok, %File.Stat{type: type}} ->
+        {:error, {:role_workspace_boundary, :unsupported_git_metadata_type, type}}
+    end
+  rescue
+    error in [ArgumentError, ErlangError, File.Error] ->
+      {:error, {:role_workspace_boundary, :git_metadata_protection_failed, error}}
+  end
+
+  defp ensure_external_git_path(external_git_dir, workspace) do
+    with :ok <- File.mkdir_p(Path.dirname(external_git_dir)),
+         {:ok, canonical_workspace} <- PathSafety.canonicalize(Path.expand(workspace)),
+         :ok <- reject_external_path_inside_workspace(external_git_dir, canonical_workspace) do
+      if File.exists?(external_git_dir) do
+        {:error, {:external_git_metadata_exists, external_git_dir}}
+      else
+        :ok
+      end
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp reject_external_path_inside_workspace(external_git_dir, canonical_workspace) do
+    expanded_external = Path.expand(external_git_dir)
+
+    case PathSafety.canonicalize(Path.dirname(expanded_external)) do
+      {:ok, canonical_parent} ->
+        canonical_external = Path.join(canonical_parent, Path.basename(expanded_external))
+        normalized_external = normalize_comparison_path(canonical_external)
+        normalized_workspace = normalize_comparison_path(canonical_workspace)
+
+        if normalized_external == normalized_workspace or
+             String.starts_with?(normalized_external <> "/", normalized_workspace <> "/") do
+          {:error, {:external_git_metadata_inside_workspace, canonical_external}}
+        else
+          :ok
+        end
+
+      {:error, reason} ->
+        {:error, {:external_git_metadata_parent_unreadable, reason}}
+    end
+  end
+
+  defp normalize_comparison_path(path) when is_binary(path) do
+    normalized = path |> Path.expand() |> String.replace("\\", "/")
+
+    if :os.type() == {:win32, :nt}, do: String.downcase(normalized), else: normalized
+  end
+
+  defp move_git_directory(git_path, external_git_dir) do
+    case File.rename(git_path, external_git_dir) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:git_metadata_move_failed, reason}}
+    end
+  end
+
+  defp write_git_pointer(git_path, external_git_dir) do
+    pointer_path = git_path <> ".symphony-pointer"
+    pointer = "gitdir: #{String.replace(external_git_dir, "\\", "/")}\n"
+
+    with :ok <- File.write(pointer_path, pointer),
+         :ok <- File.rename(pointer_path, git_path) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:git_pointer_write_failed, reason}}
+    end
+  end
+
+  defp validate_existing_git_pointer(git_path, workspace) do
+    with {:ok, content} <- File.read(git_path),
+         {:ok, external_git_dir} <- parse_git_pointer(content, git_path),
+         {:ok, canonical_workspace} <- PathSafety.canonicalize(Path.expand(workspace)),
+         {:ok, canonical_git_dir} <- PathSafety.canonicalize(external_git_dir),
+         :ok <- reject_external_path_inside_workspace(canonical_git_dir, canonical_workspace),
+         true <- File.dir?(canonical_git_dir) do
+      {:ok, %{git_metadata_protection: :already_externalized}}
+    else
+      {:error, reason} -> {:error, {:role_workspace_boundary, reason}}
+      false -> {:error, {:role_workspace_boundary, :git_pointer_target_not_directory}}
+    end
+  end
+
+  defp remove_protected_git_metadata(workspace) do
+    expected_git_dir = Path.expand(protected_git_metadata_path(workspace))
+    git_path = Path.join(Path.expand(workspace), ".git")
+
+    with {:ok, content} <- File.read(git_path),
+         {:ok, git_dir} <- parse_git_pointer(content, git_path),
+         true <- Path.expand(git_dir) == expected_git_dir do
+      case File.rm_rf(expected_git_dir) do
+        {:ok, _removed} -> :ok
+        {:error, reason, _path} -> Logger.warning("Failed to remove protected Git metadata reason=#{inspect(reason)}")
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  defp parse_git_pointer(content, git_path) when is_binary(content) do
+    case Regex.run(~r/^gitdir:\s*(.+)\s*$/m, content, capture: :all_but_first) do
+      [raw_path] ->
+        path = String.trim(raw_path)
+
+        if Path.type(path) == :absolute do
+          {:ok, Path.expand(path)}
+        else
+          {:ok, Path.expand(path, Path.dirname(git_path))}
+        end
+
+      _ ->
+        {:error, :invalid_git_pointer}
+    end
+  end
+
+  defp protect_remote_git_metadata(workspace, worker_host) do
+    external_git_dir = protected_git_metadata_path(workspace)
+    key = Path.basename(external_git_dir)
+
+    script =
+      [
+        "set -eu",
+        remote_shell_assign("workspace", workspace),
+        "git_path=\"$workspace/.git\"",
+        "metadata_root=\"$workspace/../.symphony-git-metadata\"",
+        "metadata=\"$metadata_root/#{key}\"",
+        "if [ -L \"$git_path\" ]; then exit 41; fi",
+        "if [ -d \"$git_path\" ]; then",
+        "  if [ -e \"$metadata\" ]; then exit 42; fi",
+        "  mkdir -p \"$metadata_root\"",
+        "  mv \"$git_path\" \"$metadata\"",
+        "  printf 'gitdir: %s\\n' \"$metadata\" > \"$git_path\"",
+        "elif [ -f \"$git_path\" ]; then",
+        "  gitdir=$(sed -n 's/^gitdir:[[:space:]]*//p' \"$git_path\")",
+        "  test -n \"$gitdir\"",
+        "  case \"$gitdir\" in /*) ;; *) exit 45 ;; esac",
+        "  gitdir_real=$(cd \"$gitdir\" 2>/dev/null && pwd -P)",
+        "  workspace_real=$(cd \"$workspace\" 2>/dev/null && pwd -P)",
+        "  case \"$gitdir_real\" in \"$workspace_real\"/*) exit 43 ;; esac",
+        "elif [ -e \"$git_path\" ]; then",
+        "  exit 44",
+        "fi",
+        "printf '%s\\n' '#{@remote_git_boundary_marker}'"
+      ]
+      |> Enum.join("\n")
+
+    case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
+      {:ok, {output, 0}} ->
+        if String.contains?(IO.iodata_to_binary(output), @remote_git_boundary_marker) do
+          {:ok, %{git_metadata_protection: :externalized}}
+        else
+          {:error, {:role_workspace_boundary, :invalid_remote_git_boundary_output}}
+        end
+
+      {:ok, {_output, status}} ->
+        {:error, {:role_workspace_boundary, :remote_git_metadata_protection_failed, status}}
+
+      {:error, reason} ->
+        {:error, {:role_workspace_boundary, :remote_git_metadata_protection_failed, reason}}
+    end
   end
 
   defp sanitize_hook_output_for_log(output, max_bytes \\ 2_048) do

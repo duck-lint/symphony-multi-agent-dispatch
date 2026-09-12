@@ -11,6 +11,6 @@ not define the shared lifecycle, role behavior, or lifecycle authority. The shar
 is SYMPHONY behavior structurally enforced by host code; dispatched agents use the target repository's
 applicable `AGENTS.md`, harness, and source context.
 
-The current host includes the pure lifecycle/role kernel and SYMPHONY-owned role profiles. GitHub
-lifecycle transition persistence and role-specific capability enforcement are the next seams; they
-are intentionally not implemented here.
+The current host includes the pure lifecycle/role kernel, SYMPHONY-owned role profiles, and
+host-enforced role runtime authority. GitHub lifecycle transition persistence remains a separate
+lifecycle seam.

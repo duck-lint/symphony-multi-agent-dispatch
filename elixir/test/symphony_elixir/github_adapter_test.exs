@@ -64,15 +64,11 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
     assert {:ok, ["42"]} = GitHubAdapter.fetch_issues_by_ids(["42"])
     assert_receive {:github_ids_called, ["42"]}
 
-    assert [%{"name" => "github_api"}] = GitHubAdapter.agent_tool_specs()
+    assert GitHubAdapter.agent_tool_specs() == []
 
-    assert GitHubAdapter.execute_agent_tool(
-             "github_api",
-             %{"method" => "GET", "path" => "/user"},
-             github_client: fn _method, _path, _params, _body, _opts ->
-               {:ok, %{status: 200, body: %{"login" => "octocat"}}}
-             end
-           )["success"]
+    disabled = GitHubAdapter.execute_agent_tool("github_api", %{"method" => "GET", "path" => "/user"}, [])
+    refute disabled["success"]
+    assert Jason.decode!(disabled["output"])["supportedTools"] == []
   end
 
   test "client validates repository settings and declares token environments" do
@@ -432,7 +428,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
              token_env
            ]
 
-    assert [%{"name" => "github_api"}] = binding.tool_specs
+    assert binding.tool_specs == []
     assert :ok = Config.validate!()
   end
 

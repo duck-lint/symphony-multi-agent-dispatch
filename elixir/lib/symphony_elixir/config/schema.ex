@@ -72,6 +72,7 @@ defmodule SymphonyElixir.Config.Schema do
           :project_slug,
           :assignee,
           :provider,
+          :secret_environment_names,
           :required_labels,
           :active_states,
           :terminal_states
@@ -442,7 +443,8 @@ defmodule SymphonyElixir.Config.Schema do
         project_slug: Map.get(provider, "project_slug", settings.tracker.project_slug),
         assignee: assignee,
         provider: provider,
-        secret_environment_names: Enum.uniq(secret_environment_names),
+        secret_environment_names:
+          Enum.uniq(settings.tracker.secret_environment_names ++ secret_environment_names),
         active_states: active_states,
         terminal_states: terminal_states
     }
