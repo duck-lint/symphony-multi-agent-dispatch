@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.Config do
   @moduledoc """
-  Runtime configuration loaded from `WORKFLOW.md`.
+  Runtime configuration loaded from `instance_config.yml`.
   """
 
   alias SymphonyElixir.{Config.Schema, Tracker}
-  alias SymphonyElixir.{Workflow, WorkflowStore}
+  alias SymphonyElixir.{instance_config, instance_configStore}
 
   @default_prompt_template """
   You are working on an issue from the configured tracker.
@@ -28,7 +28,7 @@ defmodule SymphonyElixir.Config do
 
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
-    WorkflowStore.settings()
+    instance_configStore.settings()
   end
 
   @spec settings!() :: Schema.t()
@@ -66,9 +66,9 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  @spec workflow_prompt() :: String.t()
-  def workflow_prompt do
-    case Workflow.current() do
+  @spec instance_config_prompt() :: String.t()
+  def instance_config_prompt do
+    case instance_config.current() do
       {:ok, %{prompt_template: prompt}} ->
         if String.trim(prompt) == "", do: @default_prompt_template, else: prompt
 
@@ -88,13 +88,13 @@ defmodule SymphonyElixir.Config do
   @doc false
   @spec local_workspace_root() :: Path.t()
   def local_workspace_root do
-    workflow_dir = Workflow.workflow_file_path() |> Path.expand() |> Path.dirname()
-    Path.expand(settings!().workspace.root, workflow_dir)
+    instance_config_dir = instance_config.instance_config_file_path() |> Path.expand() |> Path.dirname()
+    Path.expand(settings!().workspace.root, instance_config_dir)
   end
 
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
-    WorkflowStore.force_reload()
+    instance_configStore.force_reload()
   end
 
   @spec codex_runtime_settings(Path.t() | nil, keyword()) ::
@@ -125,20 +125,20 @@ defmodule SymphonyElixir.Config do
 
   defp format_config_error(reason) do
     case reason do
-      {:invalid_workflow_config, message} ->
-        "Invalid WORKFLOW.md config: #{message}"
+      {:invalid_instance_config_config, message} ->
+        "Invalid instance_config.yml config: #{message}"
 
-      {:missing_workflow_file, path, raw_reason} ->
-        "Missing WORKFLOW.md at #{path}: #{inspect(raw_reason)}"
+      {:missing_instance_config_file, path, raw_reason} ->
+        "Missing instance_config.yml at #{path}: #{inspect(raw_reason)}"
 
-      {:workflow_parse_error, raw_reason} ->
-        "Failed to parse WORKFLOW.md: #{inspect(raw_reason)}"
+      {:instance_config_parse_error, raw_reason} ->
+        "Failed to parse instance_config.yml: #{inspect(raw_reason)}"
 
-      :workflow_front_matter_not_a_map ->
-        "Failed to parse WORKFLOW.md: workflow front matter must decode to a map"
+      :instance_config_front_matter_not_a_map ->
+        "Failed to parse instance_config.yml: instance_config front matter must decode to a map"
 
       other ->
-        "Invalid WORKFLOW.md config: #{inspect(other)}"
+        "Invalid instance_config.yml config: #{inspect(other)}"
     end
   end
 end

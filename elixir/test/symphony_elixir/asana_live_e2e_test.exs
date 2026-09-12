@@ -22,14 +22,14 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
     active_name = "Symphony E2E Active #{run_id}"
     done_name = "Symphony E2E Done #{run_id}"
     test_root = Path.join(System.tmp_dir!(), run_id)
-    workflow_root = Path.join(test_root, "workflow")
-    workflow_file = Path.join(workflow_root, "WORKFLOW.md")
+    instance_config_root = Path.join(test_root, "instance_config")
+    instance_config_file = Path.join(instance_config_root, "instance_config.yml")
     workspace_root = Path.join(test_root, "workspaces")
     codex_home = isolated_codex_home!(test_root)
-    original_workflow_path = Workflow.workflow_file_path()
+    original_instance_config_path = instance_config.instance_config_file_path()
     runtime_pid = Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)
 
-    File.mkdir_p!(workflow_root)
+    File.mkdir_p!(instance_config_root)
 
     team_gid = optional_env("SYMPHONY_LIVE_ASANA_TEAM_GID")
     project = create_project!(workspace_gid, team_gid, token, project_name)
@@ -55,10 +55,10 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
                  )
 
         stop_agent_runtime_if_running(runtime_pid)
-        Workflow.set_workflow_file_path(workflow_file)
+        instance_config.set_instance_config_file_path(instance_config_file)
 
-        write_workflow!(
-          workflow_file,
+        write_instance_config!(
+          instance_config_file,
           project_gid,
           active_name,
           done_name,
@@ -109,7 +109,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
     after
       cleanup_result = delete_project(project_gid, token)
       project_readback = get_resource("/projects/#{project_gid}", token)
-      Workflow.set_workflow_file_path(original_workflow_path)
+      instance_config.set_instance_config_file_path(original_instance_config_path)
       restart_agent_runtime_if_needed(runtime_pid)
       File.rm_rf(test_root)
       assert :ok = cleanup_result
@@ -126,7 +126,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
     }
   end
 
-  defp write_workflow!(path, project_gid, active_name, done_name, workspace_root, codex_home, prompt) do
+  defp write_instance_config!(path, project_gid, active_name, done_name, workspace_root, codex_home, prompt) do
     File.write!(
       path,
       """
@@ -156,7 +156,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
       """
     )
 
-    assert :ok = SymphonyElixir.WorkflowStore.force_reload()
+    assert :ok = SymphonyElixir.instance_configStore.force_reload()
   end
 
   defp live_prompt(project_gid, done_section_gid, expected_comment) do

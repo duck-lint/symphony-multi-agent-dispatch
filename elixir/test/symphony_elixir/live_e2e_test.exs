@@ -146,7 +146,7 @@ defmodule SymphonyElixir.LiveE2ETest do
     Enum.find(states, &(&1["type"] == "started")) ||
       Enum.find(states, &(&1["type"] == "unstarted")) ||
       Enum.find(states, &(&1["type"] not in ["completed", "canceled"])) ||
-      flunk("expected team to expose at least one non-terminal workflow state")
+      flunk("expected team to expose at least one non-terminal instance_config state")
   end
 
   defp terminal_state_names(%{"states" => %{"nodes" => states}}) when is_list(states) do
@@ -324,7 +324,7 @@ defmodule SymphonyElixir.LiveE2ETest do
     Step 2:
     You must use the `linear_graphql` tool to query the current issue by `{{ issue.id }}` and read:
     - existing comments
-    - team workflow states
+    - team instance_config states
 
     A turn that only creates the file is incomplete. Do not stop after Step 1.
 
@@ -363,7 +363,7 @@ defmodule SymphonyElixir.LiveE2ETest do
     ```
 
     Step 3:
-    Use the same issue-context query result to choose a workflow state whose `type` is `completed`.
+    Use the same issue-context query result to choose a instance_config state whose `type` is `completed`.
     Then move the current issue to that state with this exact mutation:
 
     ```graphql
@@ -437,14 +437,14 @@ defmodule SymphonyElixir.LiveE2ETest do
   defp run_live_issue_flow!(backend) when backend in [:local, :ssh] do
     run_id = "symphony-live-e2e-#{backend}-#{System.unique_integer([:positive])}"
     test_root = Path.join(System.tmp_dir!(), run_id)
-    workflow_root = Path.join(test_root, "workflow")
-    workflow_file = Path.join(workflow_root, "WORKFLOW.md")
+    instance_config_root = Path.join(test_root, "instance_config")
+    instance_config_file = Path.join(instance_config_root, "instance_config.yml")
     worker_setup = live_worker_setup!(backend, run_id, test_root)
     team_key = System.get_env("SYMPHONY_LIVE_LINEAR_TEAM_KEY") || @default_team_key
-    original_workflow_path = Workflow.workflow_file_path()
+    original_instance_config_path = instance_config.instance_config_file_path()
     runtime_pid = Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)
 
-    File.mkdir_p!(workflow_root)
+    File.mkdir_p!(instance_config_root)
 
     try do
       if is_pid(runtime_pid) do
@@ -455,9 +455,9 @@ defmodule SymphonyElixir.LiveE2ETest do
                  )
       end
 
-      Workflow.set_workflow_file_path(workflow_file)
+      instance_config.set_instance_config_file_path(instance_config_file)
 
-      write_workflow_file!(workflow_file,
+      write_instance_config_file!(instance_config_file,
         tracker_api_token: "$LINEAR_API_KEY",
         tracker_project_slug: "bootstrap",
         workspace_root: worker_setup.workspace_root,
@@ -487,7 +487,7 @@ defmodule SymphonyElixir.LiveE2ETest do
             "Symphony live e2e #{backend} issue for #{project["name"]}"
           )
 
-        write_workflow_file!(workflow_file,
+        write_instance_config_file!(instance_config_file,
           tracker_api_token: "$LINEAR_API_KEY",
           tracker_project_slug: project["slugId"],
           tracker_active_states: active_state_names(team),
@@ -520,7 +520,7 @@ defmodule SymphonyElixir.LiveE2ETest do
     after
       restart_agent_runtime_if_needed()
       cleanup_live_worker_setup(worker_setup)
-      Workflow.set_workflow_file_path(original_workflow_path)
+      instance_config.set_instance_config_file_path(original_instance_config_path)
       File.rm_rf(test_root)
     end
   end

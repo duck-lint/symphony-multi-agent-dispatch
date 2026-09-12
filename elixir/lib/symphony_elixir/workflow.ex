@@ -1,62 +1,62 @@
-defmodule SymphonyElixir.Workflow do
+defmodule SymphonyElixir.instance_config do
   @moduledoc """
-  Loads workflow configuration and prompt from WORKFLOW.md.
+  Loads instance_config configuration and prompt from instance_config.yml.
   """
 
-  alias SymphonyElixir.WorkflowStore
+  alias SymphonyElixir.instance_configStore
 
-  @workflow_file_name "WORKFLOW.md"
+  @instance_config_file_name "instance_config.yml"
 
-  @spec workflow_file_path() :: Path.t()
-  def workflow_file_path do
-    Application.get_env(:symphony_elixir, :workflow_file_path) ||
-      Path.join(File.cwd!(), @workflow_file_name)
+  @spec instance_config_file_path() :: Path.t()
+  def instance_config_file_path do
+    Application.get_env(:symphony_elixir, :instance_config_file_path) ||
+      Path.join(File.cwd!(), @instance_config_file_name)
   end
 
-  @spec set_workflow_file_path(Path.t()) :: :ok
-  def set_workflow_file_path(path) when is_binary(path) do
-    Application.put_env(:symphony_elixir, :workflow_file_path, path)
+  @spec set_instance_config_file_path(Path.t()) :: :ok
+  def set_instance_config_file_path(path) when is_binary(path) do
+    Application.put_env(:symphony_elixir, :instance_config_file_path, path)
     maybe_reload_store()
     :ok
   end
 
-  @spec clear_workflow_file_path() :: :ok
-  def clear_workflow_file_path do
-    Application.delete_env(:symphony_elixir, :workflow_file_path)
+  @spec clear_instance_config_file_path() :: :ok
+  def clear_instance_config_file_path do
+    Application.delete_env(:symphony_elixir, :instance_config_file_path)
     maybe_reload_store()
     :ok
   end
 
-  @type loaded_workflow :: %{
+  @type loaded_instance_config :: %{
           config: map(),
           prompt: String.t(),
           prompt_template: String.t()
         }
 
-  @spec current() :: {:ok, loaded_workflow()} | {:error, term()}
+  @spec current() :: {:ok, loaded_instance_config()} | {:error, term()}
   def current do
-    case Process.whereis(WorkflowStore) do
+    case Process.whereis(instance_configStore) do
       pid when is_pid(pid) ->
-        WorkflowStore.current()
+        instance_configStore.current()
 
       _ ->
         load()
     end
   end
 
-  @spec load() :: {:ok, loaded_workflow()} | {:error, term()}
+  @spec load() :: {:ok, loaded_instance_config()} | {:error, term()}
   def load do
-    load(workflow_file_path())
+    load(instance_config_file_path())
   end
 
-  @spec load(Path.t()) :: {:ok, loaded_workflow()} | {:error, term()}
+  @spec load(Path.t()) :: {:ok, loaded_instance_config()} | {:error, term()}
   def load(path) when is_binary(path) do
     case File.read(path) do
       {:ok, content} ->
         parse(content)
 
       {:error, reason} ->
-        {:error, {:missing_workflow_file, path, reason}}
+        {:error, {:missing_instance_config_file, path, reason}}
     end
   end
 
@@ -74,11 +74,11 @@ defmodule SymphonyElixir.Workflow do
            prompt_template: prompt
          }}
 
-      {:error, :workflow_front_matter_not_a_map} ->
-        {:error, :workflow_front_matter_not_a_map}
+      {:error, :instance_config_front_matter_not_a_map} ->
+        {:error, :instance_config_front_matter_not_a_map}
 
       {:error, reason} ->
-        {:error, {:workflow_parse_error, reason}}
+        {:error, {:instance_config_parse_error, reason}}
     end
   end
 
@@ -107,15 +107,15 @@ defmodule SymphonyElixir.Workflow do
     else
       case YamlElixir.read_from_string(yaml) do
         {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
-        {:ok, _} -> {:error, :workflow_front_matter_not_a_map}
+        {:ok, _} -> {:error, :instance_config_front_matter_not_a_map}
         {:error, reason} -> {:error, reason}
       end
     end
   end
 
   defp maybe_reload_store do
-    if Process.whereis(WorkflowStore) do
-      _ = WorkflowStore.force_reload()
+    if Process.whereis(instance_configStore) do
+      _ = instance_configStore.force_reload()
     end
 
     :ok

@@ -26,7 +26,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       System.cmd("git", ["-C", template_repo, "add", "README.md", "keep/file.txt"])
       System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "git clone --depth 1 #{template_repo} ."
       )
@@ -47,7 +47,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         "symphony-elixir-workspace-deterministic-#{System.unique_integer([:positive])}"
       )
 
-    write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+    write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
     assert {:ok, first_workspace} = Workspace.create_for_issue("MT/Det")
     assert {:ok, second_workspace} = Workspace.create_for_issue("MT/Det")
@@ -57,18 +57,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert String.starts_with?(Path.basename(first_workspace), "MT_Det--")
   end
 
-  test "relative local workspace roots resolve from the workflow directory" do
-    workflow_dir = Path.dirname(Workflow.workflow_file_path())
+  test "relative local workspace roots resolve from the instance_config directory" do
+    instance_config_dir = Path.dirname(instance_config.instance_config_file_path())
     launcher_dir = Path.join(System.tmp_dir!(), "symphony-elixir-launcher-#{System.unique_integer([:positive])}")
     original_cwd = File.cwd!()
 
     try do
       File.mkdir_p!(launcher_dir)
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: "relative-workspaces")
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: "relative-workspaces")
       File.cd!(launcher_dir)
 
       assert {:ok, expected_workspace} =
-               SymphonyElixir.PathSafety.canonicalize(Path.join([workflow_dir, "relative-workspaces", "MT-REL"]))
+               SymphonyElixir.PathSafety.canonicalize(Path.join([instance_config_dir, "relative-workspaces", "MT-REL"]))
 
       assert {:ok, workspace} = Workspace.create_for_issue("MT-REL")
 
@@ -88,7 +88,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       )
 
     try do
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
       slash_issue = %Issue{id: "dispatch-slash", identifier: "team/a-1"}
       underscore_issue = %Issue{id: "dispatch-underscore", identifier: "team_a-1"}
@@ -117,7 +117,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       )
 
     try do
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "echo first > README.md"
       )
@@ -157,7 +157,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       File.mkdir_p!(workspace_root)
       File.write!(stale_workspace, "old state\n")
 
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
       assert {:ok, canonical_workspace} = SymphonyElixir.PathSafety.canonicalize(stale_workspace)
       assert {:ok, workspace} = Workspace.create_for_issue("MT-STALE")
@@ -184,7 +184,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       File.mkdir_p!(outside_root)
       File.ln_s!(outside_root, symlink_path)
 
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
       assert {:ok, canonical_outside_root} = SymphonyElixir.PathSafety.canonicalize(outside_root)
       assert {:ok, canonical_workspace_root} = SymphonyElixir.PathSafety.canonicalize(workspace_root)
@@ -214,7 +214,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       File.mkdir_p!(outside_root)
       File.ln_s!(outside_root, recorded_workspace)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: current_root,
         hook_before_remove: "touch \"#{hook_marker}\""
       )
@@ -246,7 +246,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       File.mkdir_p!(actual_root)
       File.ln_s!(actual_root, linked_root)
 
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: linked_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: linked_root)
 
       assert {:ok, canonical_workspace} =
                SymphonyElixir.PathSafety.canonicalize(Path.join(actual_root, "MT-LINK"))
@@ -268,7 +268,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     try do
       File.mkdir_p!(workspace_root)
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
       assert {:ok, canonical_workspace_root} =
                SymphonyElixir.PathSafety.canonicalize(workspace_root)
@@ -288,7 +288,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       )
 
     try do
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "echo nope && exit 17"
       )
@@ -311,7 +311,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     attempt_log = Path.join(test_root, "after-create-attempts")
 
     try do
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: """
         if [ -f "#{attempt_log}" ]; then count=$(wc -l < "#{attempt_log}"); else count=0; fi
@@ -340,7 +340,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       )
 
     try do
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_timeout_ms: 10,
         hook_after_create: "sleep 1"
@@ -361,7 +361,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       )
 
     try do
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
       workspace = Path.join(workspace_root, "MT-608")
       assert {:ok, canonical_workspace} = SymphonyElixir.PathSafety.canonicalize(workspace)
@@ -390,7 +390,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       File.write!(Path.join(target_workspace, "marker.txt"), "stale")
       File.write!(Path.join(untouched_workspace, "marker.txt"), "keep")
 
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
       assert :ok = Workspace.remove_issue_workspaces("S_1")
       refute File.exists?(target_workspace)
@@ -407,7 +407,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         "symphony-elixir-missing-workspaces-#{System.unique_integer([:positive])}"
       )
 
-    write_workflow_file!(Workflow.workflow_file_path(), workspace_root: missing_root)
+    write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: missing_root)
 
     assert :ok = Workspace.remove_issue_workspaces("S-2")
   end
@@ -642,25 +642,25 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "linear graphql honors a bound tracker-settings snapshot without loading live config" do
     parent = self()
-    original_workflow_path = Workflow.workflow_file_path()
-    workflow_store_pid = Process.whereis(WorkflowStore)
+    original_instance_config_path = instance_config.instance_config_file_path()
+    instance_config_store_pid = Process.whereis(instance_configStore)
 
-    missing_workflow_path =
-      Path.join(System.tmp_dir!(), "missing-bound-workflow-#{System.unique_integer([:positive])}.md")
+    missing_instance_config_path =
+      Path.join(System.tmp_dir!(), "missing-bound-instance_config-#{System.unique_integer([:positive])}.md")
 
     on_exit(fn ->
-      Workflow.set_workflow_file_path(original_workflow_path)
+      instance_config.set_instance_config_file_path(original_instance_config_path)
 
-      if is_pid(workflow_store_pid) and is_nil(Process.whereis(WorkflowStore)) do
-        Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
+      if is_pid(instance_config_store_pid) and is_nil(Process.whereis(instance_configStore)) do
+        Supervisor.restart_child(SymphonyElixir.Supervisor, instance_configStore)
       end
     end)
 
-    if is_pid(Process.whereis(WorkflowStore)) do
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, WorkflowStore)
+    if is_pid(Process.whereis(instance_configStore)) do
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, instance_configStore)
     end
 
-    Workflow.set_workflow_file_path(missing_workflow_path)
+    instance_config.set_instance_config_file_path(missing_instance_config_path)
 
     assert {:ok, %{"data" => %{"viewer" => %{"id" => "viewer-bound"}}}} =
              Client.graphql(
@@ -739,7 +739,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "issue assigned to another worker is not dispatch-eligible" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_assignee: "dev@example.com")
+    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_assignee: "dev@example.com")
 
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
@@ -761,7 +761,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "issue without every required label is not dispatch-eligible" do
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       tracker_required_labels: ["symphony", "javascript"]
     )
 
@@ -835,7 +835,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "dispatch revalidation skips an issue after a required label is removed" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
+    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_required_labels: ["symphony"])
 
     stale_issue = %Issue{
       id: "unlabeled-2",
@@ -876,7 +876,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       File.mkdir_p!(workspace_root)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "echo after_create > after_create.log\necho call >> \"#{after_create_counter}\"",
         hook_before_remove: "echo before_remove > \"#{before_remove_marker}\""
@@ -912,7 +912,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       File.mkdir_p!(workspace_root)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_before_remove: "echo failure && exit 17"
       )
@@ -937,7 +937,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       File.mkdir_p!(workspace_root)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_before_remove: "i=0; while [ $i -lt 3000 ]; do printf a; i=$((i+1)); done; exit 17"
       )
@@ -974,7 +974,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       File.mkdir_p!(workspace_root)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_before_remove: "sleep 1"
       )
@@ -992,7 +992,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
     System.delete_env("LINEAR_API_KEY")
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       tracker_kind: "memory",
       workspace_root: nil,
       max_concurrent_agents: nil,
@@ -1042,16 +1042,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.codex.read_timeout_ms == 5_000
     assert config.codex.stall_timeout_ms == 300_000
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       tracker_required_labels: [" Symphony ", "SYMPHONY", "JavaScript"]
     )
 
     assert Config.settings!().tracker.required_labels == ["symphony", "javascript"]
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: [" "])
+    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_required_labels: [" "])
     assert Config.settings!().tracker.required_labels == [""]
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       codex_command: "codex --config 'model=\"gpt-5.5\"' app-server"
     )
 
@@ -1070,7 +1070,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     on_exit(fn -> File.rm_rf(explicit_root) end)
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       workspace_root: explicit_root,
       codex_approval_policy: "on-request",
       codex_thread_sandbox: "workspace-write",
@@ -1089,31 +1089,31 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              "writableRoots" => [explicit_workspace, explicit_cache]
            }
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: ",")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_active_states: ",")
+    assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "tracker.active_states"
 
-    write_workflow_file!(Workflow.workflow_file_path(), max_concurrent_agents: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    write_instance_config_file!(instance_config.instance_config_file_path(), max_concurrent_agents: "bad")
+    assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "agent.max_concurrent_agents"
 
-    write_workflow_file!(Workflow.workflow_file_path(), worker_max_concurrent_agents_per_host: 0)
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    write_instance_config_file!(instance_config.instance_config_file_path(), worker_max_concurrent_agents_per_host: 0)
+    assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "worker.max_concurrent_agents_per_host"
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_turn_timeout_ms: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    write_instance_config_file!(instance_config.instance_config_file_path(), codex_turn_timeout_ms: "bad")
+    assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "codex.turn_timeout_ms"
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_read_timeout_ms: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    write_instance_config_file!(instance_config.instance_config_file_path(), codex_read_timeout_ms: "bad")
+    assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "codex.read_timeout_ms"
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_stall_timeout_ms: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    write_instance_config_file!(instance_config.instance_config_file_path(), codex_stall_timeout_ms: "bad")
+    assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "codex.stall_timeout_ms"
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       tracker_active_states: %{todo: true},
       tracker_terminal_states: %{done: true},
       poll_interval_ms: %{bad: true},
@@ -1128,21 +1128,21 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       server_host: 123
     )
 
-    assert {:error, {:invalid_workflow_config, _message}} = Config.validate!()
+    assert {:error, {:invalid_instance_config_config, _message}} = Config.validate!()
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_approval_policy: "")
+    write_instance_config_file!(instance_config.instance_config_file_path(), codex_approval_policy: "")
     assert :ok = Config.validate!()
     assert Config.settings!().codex.approval_policy == ""
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_thread_sandbox: "")
+    write_instance_config_file!(instance_config.instance_config_file_path(), codex_thread_sandbox: "")
     assert :ok = Config.validate!()
     assert Config.settings!().codex.thread_sandbox == ""
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_turn_sandbox_policy: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    write_instance_config_file!(instance_config.instance_config_file_path(), codex_turn_sandbox_policy: "bad")
+    assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "codex.turn_sandbox_policy"
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       codex_approval_policy: "future-policy",
       codex_thread_sandbox: "future-sandbox",
       codex_turn_sandbox_policy: %{
@@ -1162,7 +1162,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              "nested" => %{"flag" => true}
            }
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server")
+    write_instance_config_file!(instance_config.instance_config_file_path(), codex_command: "codex app-server")
     assert Config.settings!().codex.command == "codex app-server"
   end
 
@@ -1184,7 +1184,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       restore_env(api_key_env_var, previous_api_key)
     end)
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       tracker_api_token: "$#{api_key_env_var}",
       workspace_root: "$#{workspace_env_var}",
       codex_command: "#{codex_bin} app-server"
@@ -1288,7 +1288,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       restore_env(api_key_env_var, previous_api_key)
     end)
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       tracker_api_token: "env:#{api_key_env_var}",
       workspace_root: "env:#{workspace_env_var}"
     )
@@ -1299,7 +1299,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "config supports per-state max concurrent agent overrides" do
-    workflow = """
+    instance_config = """
     ---
     tracker:
       kind: memory
@@ -1312,7 +1312,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     ---
     """
 
-    File.write!(Workflow.workflow_file_path(), workflow)
+    File.write!(instance_config.instance_config_file_path(), instance_config)
 
     assert Config.settings!().agent.max_concurrent_agents == 10
     assert Config.max_concurrent_agents_for_state("Todo") == 1
@@ -1321,7 +1321,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.max_concurrent_agents_for_state("Closed") == 10
     assert Config.max_concurrent_agents_for_state(:not_a_string) == 10
 
-    write_workflow_file!(Workflow.workflow_file_path(), worker_max_concurrent_agents_per_host: 2)
+    write_instance_config_file!(instance_config.instance_config_file_path(), worker_max_concurrent_agents_per_host: 2)
     assert :ok = Config.validate!()
     assert Config.settings!().worker.max_concurrent_agents_per_host == 2
   end
@@ -1494,7 +1494,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       issue_workspace = Path.join(workspace_root, "MT-100")
       File.mkdir_p!(issue_workspace)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_turn_sandbox_policy: %{
           type: "workspaceWrite",
@@ -1511,7 +1511,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
                "networkAccess" => true
              }
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_turn_sandbox_policy: %{
           type: "futureSandbox",
@@ -1552,7 +1552,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       File.mkdir_p!(issue_workspace)
 
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: workspace_root)
 
       settings = Config.settings!()
 
@@ -1591,11 +1591,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
-  test "workflow prompt is used when building base prompt" do
-    workflow_prompt = "Workflow prompt body used as codex instruction."
+  test "instance_config prompt is used when building base prompt" do
+    instance_config_prompt = "instance_config prompt body used as codex instruction."
 
-    write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
-    assert Config.workflow_prompt() == workflow_prompt
+    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: instance_config_prompt)
+    assert Config.instance_config_prompt() == instance_config_prompt
   end
 
   test "remote workspace lifecycle uses ssh host aliases from worker config" do
@@ -1639,7 +1639,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       File.chmod!(fake_ssh, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         worker_ssh_hosts: ["worker-01:2200"],
         hook_before_run: "echo before-run",

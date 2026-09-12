@@ -5,4 +5,4 @@ codex:
   command: codex app-server
 ---
 
-Test workflow.
+Test instance_config.

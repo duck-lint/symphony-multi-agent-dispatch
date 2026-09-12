@@ -18,7 +18,7 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 2. Creates a workspace per issue
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
-4. Sends a workflow prompt to Codex
+4. Sends a instance_config prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
 During app-server sessions, the selected tracker adapter may advertise provider-native tools. The
@@ -41,16 +41,16 @@ tracker issue can become a dispatch candidate again after restart.
    [Harness engineering](https://openai.com/index/harness-engineering/).
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
    set it as the `LINEAR_API_KEY` environment variable.
-3. Copy this directory's `WORKFLOW.md` to your repo.
+3. Copy this directory's `instance_config.yml` to your repo.
 4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
    - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
      operations such as comment editing or upload flows.
-5. Customize the copied `WORKFLOW.md` file for your project.
+5. Customize the copied `instance_config.yml` file for your project.
    - To get your project's slug, right-click the project and copy its URL. The slug is part of the
      URL.
-   - When creating a workflow based on this repo, note that it depends on non-standard Linear
+   - When creating a instance_config based on this repo, note that it depends on non-standard Linear
      issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
-     Team Settings → Workflow in Linear.
+     Team Settings → instance_config in Linear.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Prerequisites
@@ -71,7 +71,7 @@ mise trust
 mise install
 mise exec -- mix setup
 mise exec -- mix build
-mise exec -- ./bin/symphony ./WORKFLOW.md
+mise exec -- ./bin/symphony ./instance_config.yml
 ```
 
 ## Burrito releases
@@ -87,32 +87,32 @@ Supported release targets:
 - `linux_arm64`
 - `linux_x86_64`
 
-`v*` tags publish all four targets with checksums. A manual workflow run builds the same
+`v*` tags publish all four targets with checksums. A manual instance_config run builds the same
 artifacts without creating a release.
 
 After downloading the executable for your platform from a release:
 
 ```bash
 chmod +x ./symphony-v0.0.1-macos_arm64
-./symphony-v0.0.1-macos_arm64 ./WORKFLOW.md
+./symphony-v0.0.1-macos_arm64 ./instance_config.yml
 ```
 
 ## Configuration
 
-Pass a custom workflow file path to `./bin/symphony` when starting the service:
+Pass a custom instance_config file path to `./bin/symphony` when starting the service:
 
 ```bash
-./bin/symphony /path/to/custom/WORKFLOW.md
+./bin/symphony /path/to/custom/instance_config.yml
 ```
 
-If no path is passed, Symphony defaults to `./WORKFLOW.md`.
+If no path is passed, Symphony defaults to `./instance_config.yml`.
 
 Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
 
-The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
+The `instance_config.yml` file uses YAML front matter for configuration, plus a Markdown body used as the
 Codex session prompt.
 
 Minimal example:
@@ -160,7 +160,7 @@ Notes:
 - When `codex.turn_sandbox_policy` is set explicitly, Symphony passes the map through to Codex
   unchanged. Compatibility then depends on the targeted Codex app-server version rather than local
   Symphony validation.
-- Workflows that run package managers or other commands that resolve external hosts should set
+- instance_configs that run package managers or other commands that resolve external hosts should set
   `networkAccess: true` in `codex.turn_sandbox_policy`; otherwise DNS/network access may be denied
   by the Codex turn sandbox.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
@@ -173,7 +173,7 @@ Notes:
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - For the Linear adapter, `tracker.provider.api_key` reads from `LINEAR_API_KEY` when unset or
   when value is `$LINEAR_API_KEY`. The legacy flat `tracker.api_key` alias behaves the same way.
-- Do not put a literal tracker token in a repo-owned `WORKFLOW.md` if Codex can read that
+- Do not put a literal tracker token in a repo-owned `instance_config.yml` if Codex can read that
   workspace. Use `$VAR`/host-side secret references so Symphony can keep the token out of the
   child environment.
 - For path values, `~` is expanded to the home directory.
@@ -194,8 +194,8 @@ codex:
   command: "$CODEX_BIN --config 'model=\"gpt-5.5\"' app-server"
 ```
 
-- If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.
-- If a later reload fails, Symphony keeps running with the last known good workflow and logs the
+- If `instance_config.yml` is missing or has invalid YAML at startup, Symphony does not boot.
+- If a later reload fails, Symphony keeps running with the last known good instance_config and logs the
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
@@ -226,7 +226,7 @@ codex:
   Codex child. `project_slug` scopes scheduler reads, not raw tool calls; the tool can access
   whatever the configured Linear token can access.
 - Responsibility and errors: `linear_graphql` adds no idempotency key, retry, scope guard, or
-  rate-limit policy, so workflows own idempotent mutations and handling provider errors. Read/config
+  rate-limit policy, so instance_configs own idempotent mutations and handling provider errors. Read/config
   failures use `{:error, :missing_linear_api_token}`, `{:error, :missing_linear_project_slug}`,
   `{:error, :invalid_linear_endpoint}`, `{:error, :invalid_linear_assignee}`,
   `{:error, :missing_linear_viewer_identity}`, `{:error, {:linear_api_status, status}}`,
@@ -301,7 +301,7 @@ The observability UI now runs on a minimal Phoenix stack:
 
 - `lib/`: application code and Mix tasks
 - `test/`: ExUnit coverage for runtime behavior
-- `WORKFLOW.md`: in-repo workflow contract used by local runs
+- `instance_config.yml`: in-repo instance_config contract used by local runs
 - `../.codex/`: repository-local Codex skills and setup helpers
 
 ## Testing
@@ -336,7 +336,7 @@ the transport representative without depending on long-lived external machines.
 
 Set `SYMPHONY_LIVE_SSH_WORKER_HOSTS` if you want `make e2e` to target real SSH hosts instead.
 
-The live test creates a temporary Linear project and issue, writes a temporary `WORKFLOW.md`, runs
+The live test creates a temporary Linear project and issue, writes a temporary `instance_config.yml`, runs
 a real agent turn, verifies the workspace side effect, requires Codex to comment on and close the
 Linear issue, then marks the project completed so the run remains visible in Linear.
 

@@ -18,14 +18,14 @@ defmodule SymphonyElixir.GitLab.LiveE2ETest do
     token = required_env!("GITLAB_PAT")
     run_id = "symphony-gitlab-live-e2e-#{System.unique_integer([:positive])}"
     test_root = Path.join(System.tmp_dir!(), run_id)
-    workflow_root = Path.join(test_root, "workflow")
-    workflow_file = Path.join(workflow_root, "WORKFLOW.md")
+    instance_config_root = Path.join(test_root, "instance_config")
+    instance_config_file = Path.join(instance_config_root, "instance_config.yml")
     workspace_root = Path.join(test_root, "workspaces")
     codex_home = isolated_codex_home!(test_root)
-    original_workflow_path = Workflow.workflow_file_path()
+    original_instance_config_path = instance_config.instance_config_file_path()
     runtime_pid = Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)
 
-    File.mkdir_p!(workflow_root)
+    File.mkdir_p!(instance_config_root)
 
     issue_payload =
       create_issue!(
@@ -47,10 +47,10 @@ defmodule SymphonyElixir.GitLab.LiveE2ETest do
                )
 
       stop_agent_runtime_if_running(runtime_pid)
-      Workflow.set_workflow_file_path(workflow_file)
+      instance_config.set_instance_config_file_path(instance_config_file)
 
-      write_workflow!(
-        workflow_file,
+      write_instance_config!(
+        instance_config_file,
         project_id,
         workspace_root,
         codex_home,
@@ -89,7 +89,7 @@ defmodule SymphonyElixir.GitLab.LiveE2ETest do
     after
       close_result = close_issue(project_id, token, issue_iid)
       delete_result = delete_issue(project_id, token, issue_iid)
-      Workflow.set_workflow_file_path(original_workflow_path)
+      instance_config.set_instance_config_file_path(original_instance_config_path)
       restart_agent_runtime_if_needed(runtime_pid)
       File.rm_rf(test_root)
       assert :ok = close_result
@@ -107,7 +107,7 @@ defmodule SymphonyElixir.GitLab.LiveE2ETest do
     }
   end
 
-  defp write_workflow!(path, project_id, workspace_root, codex_home, prompt) do
+  defp write_instance_config!(path, project_id, workspace_root, codex_home, prompt) do
     File.write!(
       path,
       """
@@ -137,7 +137,7 @@ defmodule SymphonyElixir.GitLab.LiveE2ETest do
       """
     )
 
-    assert :ok = SymphonyElixir.WorkflowStore.force_reload()
+    assert :ok = SymphonyElixir.instance_configStore.force_reload()
   end
 
   defp live_prompt(project_id, expected_comment) do

@@ -1,6 +1,6 @@
-defmodule SymphonyElixir.WorkflowStore do
+defmodule SymphonyElixir.instance_configStore do
   @moduledoc """
-  Caches the last known good workflow and reloads it when `WORKFLOW.md` changes.
+  Caches the last known good instance_config and reloads it when `instance_config.yml` changes.
   """
 
   use GenServer
@@ -8,14 +8,14 @@ defmodule SymphonyElixir.WorkflowStore do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Workflow
+  alias SymphonyElixir.instance_config
 
   @poll_interval_ms 1_000
 
   defmodule State do
     @moduledoc false
 
-    defstruct [:path, :stamp, :workflow, :settings]
+    defstruct [:path, :stamp, :instance_config, :settings]
   end
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -23,14 +23,14 @@ defmodule SymphonyElixir.WorkflowStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @spec current() :: {:ok, Workflow.loaded_workflow()} | {:error, term()}
+  @spec current() :: {:ok, instance_config.loaded_instance_config()} | {:error, term()}
   def current do
     case Process.whereis(__MODULE__) do
       pid when is_pid(pid) ->
         GenServer.call(__MODULE__, :current)
 
       _ ->
-        Workflow.load()
+        instance_config.load()
     end
   end
 
@@ -41,7 +41,7 @@ defmodule SymphonyElixir.WorkflowStore do
         GenServer.call(__MODULE__, :settings)
 
       _ ->
-        case load_state(Workflow.workflow_file_path()) do
+        case load_state(instance_config.instance_config_file_path()) do
           {:ok, %State{settings: settings}} -> {:ok, settings}
           {:error, reason} -> {:error, reason}
         end
@@ -55,7 +55,7 @@ defmodule SymphonyElixir.WorkflowStore do
         GenServer.call(__MODULE__, :force_reload)
 
       _ ->
-        case load_state(Workflow.workflow_file_path()) do
+        case load_state(instance_config.instance_config_file_path()) do
           {:ok, _state} -> :ok
           {:error, reason} -> {:error, reason}
         end
@@ -64,7 +64,7 @@ defmodule SymphonyElixir.WorkflowStore do
 
   @impl true
   def init(_opts) do
-    case load_state(Workflow.workflow_file_path()) do
+    case load_state(instance_config.instance_config_file_path()) do
       {:ok, state} ->
         schedule_poll()
         {:ok, state}
@@ -78,10 +78,10 @@ defmodule SymphonyElixir.WorkflowStore do
   def handle_call(:current, _from, %State{} = state) do
     case reload_state(state) do
       {:ok, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
+        {:reply, {:ok, new_state.instance_config}, new_state}
 
       {:error, _reason, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
+        {:reply, {:ok, new_state.instance_config}, new_state}
     end
   end
 
@@ -120,7 +120,7 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   defp reload_state(%State{} = state) do
-    path = Workflow.workflow_file_path()
+    path = instance_config.instance_config_file_path()
 
     if path != state.path do
       reload_path(path, state)
@@ -155,11 +155,11 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   defp load_state(path) do
-    with {:ok, workflow} <- Workflow.load(path),
-         {:ok, settings} <- Schema.parse(workflow.config),
+    with {:ok, instance_config} <- instance_config.load(path),
+         {:ok, settings} <- Schema.parse(instance_config.config),
          :ok <- Config.validate_settings(settings),
          {:ok, stamp} <- current_stamp(path) do
-      {:ok, %State{path: path, stamp: stamp, workflow: workflow, settings: settings}}
+      {:ok, %State{path: path, stamp: stamp, instance_config: instance_config, settings: settings}}
     else
       {:error, reason} ->
         {:error, reason}
@@ -176,6 +176,6 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   defp log_reload_error(path, reason) do
-    Logger.error("Failed to reload workflow path=#{path} reason=#{inspect(reason)}; keeping last known good configuration")
+    Logger.error("Failed to reload instance_config path=#{path} reason=#{inspect(reason)}; keeping last known good configuration")
   end
 end

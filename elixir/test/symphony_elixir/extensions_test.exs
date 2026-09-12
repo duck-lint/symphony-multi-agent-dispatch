@@ -83,127 +83,127 @@ defmodule SymphonyElixir.ExtensionsTest do
     :ok
   end
 
-  test "workflow store reloads changes, keeps last good workflow, and falls back when stopped" do
-    ensure_workflow_store_running()
-    assert {:ok, %{prompt: "You are an agent for this repository."}} = Workflow.current()
+  test "instance_config store reloads changes, keeps last good instance_config, and falls back when stopped" do
+    ensure_instance_config_store_running()
+    assert {:ok, %{prompt: "You are an agent for this repository."}} = instance_config.current()
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       prompt: "Second prompt",
       poll_interval_ms: 45_000
     )
 
-    send(WorkflowStore, :poll)
+    send(instance_configStore, :poll)
 
     assert_eventually(fn ->
-      match?({:ok, %{prompt: "Second prompt"}}, Workflow.current())
+      match?({:ok, %{prompt: "Second prompt"}}, instance_config.current())
     end)
 
     good_settings = Config.settings!()
     assert good_settings.polling.interval_ms == 45_000
 
-    File.write!(Workflow.workflow_file_path(), "---\ntracker: [\n---\nBroken prompt\n")
-    assert {:error, _reason} = WorkflowStore.force_reload()
-    assert {:ok, %{prompt: "Second prompt"}} = Workflow.current()
+    File.write!(instance_config.instance_config_file_path(), "---\ntracker: [\n---\nBroken prompt\n")
+    assert {:error, _reason} = instance_configStore.force_reload()
+    assert {:ok, %{prompt: "Second prompt"}} = instance_config.current()
 
     File.write!(
-      Workflow.workflow_file_path(),
+      instance_config.instance_config_file_path(),
       "---\npolling:\n  interval_ms: nope\n---\nTyped-invalid prompt\n"
     )
 
-    assert {:error, {:invalid_workflow_config, message}} = WorkflowStore.force_reload()
+    assert {:error, {:invalid_instance_config_config, message}} = instance_configStore.force_reload()
     assert message =~ "polling.interval_ms"
-    assert {:ok, %{prompt: "Second prompt"}} = Workflow.current()
+    assert {:ok, %{prompt: "Second prompt"}} = instance_config.current()
     assert Config.settings!().polling.interval_ms == good_settings.polling.interval_ms
-    assert {:error, {:invalid_workflow_config, _message}} = Config.validate!()
+    assert {:error, {:invalid_instance_config_config, _message}} = Config.validate!()
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    write_instance_config_file!(instance_config.instance_config_file_path(),
       tracker_kind: "linear",
       tracker_api_token: "token",
       tracker_project_slug: nil,
       prompt: "Semantic-invalid prompt"
     )
 
-    assert {:error, :missing_linear_project_slug} = WorkflowStore.force_reload()
-    assert {:ok, %{prompt: "Second prompt"}} = Workflow.current()
+    assert {:error, :missing_linear_project_slug} = instance_configStore.force_reload()
+    assert {:ok, %{prompt: "Second prompt"}} = instance_config.current()
     assert Config.settings!().polling.interval_ms == good_settings.polling.interval_ms
     assert {:error, :missing_linear_project_slug} = Config.validate!()
 
-    third_workflow = Path.join(Path.dirname(Workflow.workflow_file_path()), "THIRD_WORKFLOW.md")
-    write_workflow_file!(third_workflow, prompt: "Third prompt")
-    Workflow.set_workflow_file_path(third_workflow)
-    assert {:ok, %{prompt: "Third prompt"}} = Workflow.current()
+    third_instance_config = Path.join(Path.dirname(instance_config.instance_config_file_path()), "THIRD_instance_config.yml")
+    write_instance_config_file!(third_instance_config, prompt: "Third prompt")
+    instance_config.set_instance_config_file_path(third_instance_config)
+    assert {:ok, %{prompt: "Third prompt"}} = instance_config.current()
 
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, WorkflowStore)
-    assert {:ok, %{prompt: "Third prompt"}} = WorkflowStore.current()
-    assert {:ok, settings} = WorkflowStore.settings()
+    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, instance_configStore)
+    assert {:ok, %{prompt: "Third prompt"}} = instance_configStore.current()
+    assert {:ok, settings} = instance_configStore.settings()
     assert settings.polling.interval_ms == 30_000
-    assert :ok = WorkflowStore.force_reload()
-    assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
+    assert :ok = instance_configStore.force_reload()
+    assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, instance_configStore)
   end
 
-  test "workflow store init stops on missing workflow file" do
-    missing_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "MISSING_WORKFLOW.md")
-    Workflow.set_workflow_file_path(missing_path)
+  test "instance_config store init stops on missing instance_config file" do
+    missing_path = Path.join(Path.dirname(instance_config.instance_config_file_path()), "MISSING_instance_config.yml")
+    instance_config.set_instance_config_file_path(missing_path)
 
-    assert {:stop, {:missing_workflow_file, ^missing_path, :enoent}} = WorkflowStore.init([])
+    assert {:stop, {:missing_instance_config_file, ^missing_path, :enoent}} = instance_configStore.init([])
   end
 
-  test "workflow store start_link and poll callback cover missing-file error paths" do
-    ensure_workflow_store_running()
-    existing_path = Workflow.workflow_file_path()
-    manual_path = Path.join(Path.dirname(existing_path), "MANUAL_WORKFLOW.md")
-    missing_path = Path.join(Path.dirname(existing_path), "MANUAL_MISSING_WORKFLOW.md")
+  test "instance_config store start_link and poll callback cover missing-file error paths" do
+    ensure_instance_config_store_running()
+    existing_path = instance_config.instance_config_file_path()
+    manual_path = Path.join(Path.dirname(existing_path), "MANUAL_instance_config.yml")
+    missing_path = Path.join(Path.dirname(existing_path), "MANUAL_MISSING_instance_config.yml")
 
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, WorkflowStore)
+    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, instance_configStore)
 
-    Workflow.set_workflow_file_path(missing_path)
+    instance_config.set_instance_config_file_path(missing_path)
 
-    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
-             WorkflowStore.settings()
+    assert {:error, {:missing_instance_config_file, ^missing_path, :enoent}} =
+             instance_configStore.settings()
 
-    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
-             WorkflowStore.force_reload()
+    assert {:error, {:missing_instance_config_file, ^missing_path, :enoent}} =
+             instance_configStore.force_reload()
 
-    write_workflow_file!(manual_path, prompt: "Manual workflow prompt")
-    Workflow.set_workflow_file_path(manual_path)
+    write_instance_config_file!(manual_path, prompt: "Manual instance_config prompt")
+    instance_config.set_instance_config_file_path(manual_path)
 
-    assert {:ok, manual_pid} = WorkflowStore.start_link()
+    assert {:ok, manual_pid} = instance_configStore.start_link()
     assert Process.alive?(manual_pid)
 
     state = :sys.get_state(manual_pid)
     File.write!(manual_path, "---\ntracker: [\n---\nBroken prompt\n")
-    assert {:noreply, returned_state} = WorkflowStore.handle_info(:poll, state)
-    assert returned_state.workflow.prompt == "Manual workflow prompt"
+    assert {:noreply, returned_state} = instance_configStore.handle_info(:poll, state)
+    assert returned_state.instance_config.prompt == "Manual instance_config prompt"
     refute returned_state.stamp == nil
     assert_receive :poll, 1_100
 
-    Workflow.set_workflow_file_path(missing_path)
-    assert {:noreply, path_error_state} = WorkflowStore.handle_info(:poll, returned_state)
-    assert path_error_state.workflow.prompt == "Manual workflow prompt"
+    instance_config.set_instance_config_file_path(missing_path)
+    assert {:noreply, path_error_state} = instance_configStore.handle_info(:poll, returned_state)
+    assert path_error_state.instance_config.prompt == "Manual instance_config prompt"
     assert_receive :poll, 1_100
 
-    Workflow.set_workflow_file_path(manual_path)
+    instance_config.set_instance_config_file_path(manual_path)
     File.rm!(manual_path)
-    assert {:noreply, removed_state} = WorkflowStore.handle_info(:poll, path_error_state)
-    assert removed_state.workflow.prompt == "Manual workflow prompt"
+    assert {:noreply, removed_state} = instance_configStore.handle_info(:poll, path_error_state)
+    assert removed_state.instance_config.prompt == "Manual instance_config prompt"
     assert_receive :poll, 1_100
 
     assert :ok = GenServer.stop(manual_pid)
 
-    Workflow.set_workflow_file_path(existing_path)
+    instance_config.set_instance_config_file_path(existing_path)
 
-    restart_result = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
+    restart_result = Supervisor.restart_child(SymphonyElixir.Supervisor, instance_configStore)
 
     assert match?({:ok, _pid}, restart_result) or
              match?({:error, {:already_started, _pid}}, restart_result)
 
-    assert :ok = WorkflowStore.force_reload()
+    assert :ok = instance_configStore.force_reload()
   end
 
   test "tracker delegates to memory and linear adapters" do
     issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue, %{id: "ignored"}])
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "memory")
 
     assert Config.settings!().tracker.kind == "memory"
     assert SymphonyElixir.Tracker.adapter() == Memory
@@ -222,7 +222,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, {:unsupported_tracker_kind, "future-tracker"}} =
              SymphonyElixir.Tracker.adapter_for_kind("future-tracker")
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
+    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "linear")
     assert SymphonyElixir.Tracker.adapter() == Adapter
     assert SymphonyElixir.Tracker.bind_agent_tools().secret_environment_names == ["LINEAR_API_KEY"]
   end
@@ -728,11 +728,11 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   defp assert_eventually(_fun, 0), do: flunk("condition not met in time")
 
-  defp ensure_workflow_store_running do
-    if Process.whereis(WorkflowStore) do
+  defp ensure_instance_config_store_running do
+    if Process.whereis(instance_configStore) do
       :ok
     else
-      case Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore) do
+      case Supervisor.restart_child(SymphonyElixir.Supervisor, instance_configStore) do
         {:ok, _pid} -> :ok
         {:error, {:already_started, _pid}} -> :ok
       end

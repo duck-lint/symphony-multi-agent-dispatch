@@ -167,7 +167,7 @@ Intent:
 - do **not** reinstall or wipe the whole WSL distro merely to remove SYMPHONY;
 - preserve unrelated WSL state, Codex installation/auth, Git/user configuration, and unrelated projects/tools.
 
-Before deletion, produce an explicit manifest of Symphony-specific WSL paths/state to remove. After reset, reinstall only the minimal adapter/supervisor bridge actually required by the new workflow.
+Before deletion, produce an explicit manifest of Symphony-specific WSL paths/state to remove. After reset, reinstall only the minimal adapter/supervisor bridge actually required by the new instance_config.
 
 There is no migration/backward-compatibility requirement for abandoned SYMPHONY state.
 

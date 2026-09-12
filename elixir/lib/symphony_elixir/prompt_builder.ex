@@ -3,14 +3,14 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from normalized tracker work item data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.{Config, instance_config}
 
   @render_opts [strict_variables: true, strict_filters: true]
 
   @spec build_prompt(SymphonyElixir.Tracker.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
     template =
-      Workflow.current()
+      instance_config.current()
       |> prompt_template!()
       |> parse_template!()
 
@@ -28,7 +28,7 @@ defmodule SymphonyElixir.PromptBuilder do
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
 
   defp prompt_template!({:error, reason}) do
-    raise RuntimeError, "workflow_unavailable: #{inspect(reason)}"
+    raise RuntimeError, "instance_config_unavailable: #{inspect(reason)}"
   end
 
   defp parse_template!(prompt) when is_binary(prompt) do
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp default_prompt(prompt) when is_binary(prompt) do
     if String.trim(prompt) == "" do
-      Config.workflow_prompt()
+      Config.instance_config_prompt()
     else
       prompt
     end

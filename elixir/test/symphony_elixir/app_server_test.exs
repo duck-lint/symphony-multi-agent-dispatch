@@ -15,7 +15,7 @@ defmodule SymphonyElixir.AppServerTest do
       File.mkdir_p!(workspace_root)
       File.mkdir_p!(outside_workspace)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root
       )
 
@@ -55,7 +55,7 @@ defmodule SymphonyElixir.AppServerTest do
       File.mkdir_p!(outside_workspace)
       File.ln_s!(outside_workspace, symlink_workspace)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root
       )
 
@@ -115,7 +115,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
         codex_turn_timeout_ms: 250
@@ -153,7 +153,7 @@ defmodule SymphonyElixir.AppServerTest do
       done
       """)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
         codex_turn_timeout_ms: 100
@@ -242,7 +242,7 @@ defmodule SymphonyElixir.AppServerTest do
       Enum.each(policy_cases, fn configured_policy ->
         File.rm(trace_file)
 
-        write_workflow_file!(Workflow.workflow_file_path(),
+        write_instance_config_file!(instance_config.instance_config_file_path(),
           workspace_root: workspace_root,
           codex_command: "#{codex_binary} app-server",
           codex_turn_sandbox_policy: configured_policy
@@ -327,7 +327,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -392,7 +392,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -455,7 +455,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -538,7 +538,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
         codex_approval_policy: "never"
@@ -675,7 +675,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
         codex_approval_policy: "never"
@@ -760,7 +760,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
         codex_approval_policy: "never"
@@ -830,7 +830,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
         codex_approval_policy: "never"
@@ -914,7 +914,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -1015,7 +1015,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -1137,7 +1137,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -1227,7 +1227,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -1291,7 +1291,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -1366,7 +1366,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -1470,7 +1470,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: workspace_root,
         tracker_api_token: "$#{custom_secret_env}",
         codex_command: "#{codex_binary} app-server"
@@ -1553,7 +1553,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(fake_ssh, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
+      write_instance_config_file!(instance_config.instance_config_file_path(),
         workspace_root: "/remote/workspaces",
         codex_command: "fake-remote-codex app-server"
       )

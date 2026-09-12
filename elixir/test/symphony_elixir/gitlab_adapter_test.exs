@@ -424,7 +424,7 @@ defmodule SymphonyElixir.GitLab.AdapterTest do
 
     on_exit(fn -> restore_env(token_env, previous_token) end)
 
-    write_gitlab_workflow!(Workflow.workflow_file_path(), "$#{token_env}")
+    write_gitlab_instance_config!(instance_config.instance_config_file_path(), "$#{token_env}")
 
     binding = Tracker.bind_agent_tools()
 
@@ -476,7 +476,7 @@ defmodule SymphonyElixir.GitLab.AdapterTest do
     }
   end
 
-  defp write_gitlab_workflow!(path, token) do
+  defp write_gitlab_instance_config!(path, token) do
     File.write!(
       path,
       """
@@ -494,8 +494,8 @@ defmodule SymphonyElixir.GitLab.AdapterTest do
       """
     )
 
-    if Process.whereis(SymphonyElixir.WorkflowStore) do
-      assert :ok = SymphonyElixir.WorkflowStore.force_reload()
+    if Process.whereis(SymphonyElixir.instance_configStore) do
+      assert :ok = SymphonyElixir.instance_configStore.force_reload()
     end
   end
 end

@@ -43,7 +43,7 @@ defmodule SymphonyElixir.Tracker do
   @doc """
   Captures the selected adapter and effective tracker settings for one
   app-server session so tool advertisement and execution cannot drift across a
-  workflow reload.
+  instance_config reload.
   """
   @spec bind_agent_tools() :: map()
   def bind_agent_tools do

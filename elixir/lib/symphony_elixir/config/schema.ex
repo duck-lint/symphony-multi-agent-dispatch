@@ -301,7 +301,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
 
-  @spec parse(map()) :: {:ok, %__MODULE__{}} | {:error, {:invalid_workflow_config, String.t()}}
+  @spec parse(map()) :: {:ok, %__MODULE__{}} | {:error, {:invalid_instance_config_config, String.t()}}
   def parse(config) when is_map(config) do
     config
     |> normalize_keys()
@@ -313,7 +313,7 @@ defmodule SymphonyElixir.Config.Schema do
         {:ok, finalize_settings(settings)}
 
       {:error, changeset} ->
-        {:error, {:invalid_workflow_config, format_errors(changeset)}}
+        {:error, {:invalid_instance_config_config, format_errors(changeset)}}
     end
   end
 

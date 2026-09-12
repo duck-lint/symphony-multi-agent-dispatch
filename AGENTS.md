@@ -74,7 +74,7 @@ If not, leave it alone unless required for safety.
 
 SYMPHONY must not structurally privilege one target repository.
 
-Target-project identity, repository bootstrap, workflow/harness inputs, and workspace policy must be project-scoped configuration rather than hard-coded assumptions.
+Target-project identity, repository bootstrap, instance_config/harness inputs, and workspace policy must be project-scoped configuration rather than hard-coded assumptions.
 
 **The exact N-project hosting model is not yet frozen.** In particular, do not yet assume either:
 
@@ -121,7 +121,7 @@ For documentation/reconciliation work, classify inherited material as:
 
 Do not implement while performing a donor-doc review unless the task explicitly authorizes implementation.
 
-Pay special attention to hidden architectural assumptions in apparently operational documentation: scheduling identity, workspace identity, tracker scope, workflow scope, thread lifetime, retry ownership, project selection, and mutation authority.
+Pay special attention to hidden architectural assumptions in apparently operational documentation: scheduling identity, workspace identity, tracker scope, instance_config scope, thread lifetime, retry ownership, project selection, and mutation authority.
 
 ## Change discipline
 

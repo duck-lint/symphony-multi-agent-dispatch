@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.TestSupport do
-  @workflow_prompt "You are an agent for this repository."
+  @instance_config_prompt "You are an agent for this repository."
 
   defmacro __using__(_opts) do
     quote do
@@ -17,32 +17,32 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
       alias SymphonyElixir.Tracker.Issue
-      alias SymphonyElixir.Workflow
-      alias SymphonyElixir.WorkflowStore
+      alias SymphonyElixir.instance_config
+      alias SymphonyElixir.instance_configStore
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [write_instance_config_file!: 1, write_instance_config_file!: 2, restore_env: 2, stop_default_http_server: 0]
 
       setup do
-        workflow_root =
+        instance_config_root =
           Path.join(
             System.tmp_dir!(),
-            "symphony-elixir-workflow-#{System.unique_integer([:positive])}"
+            "symphony-elixir-instance_config-#{System.unique_integer([:positive])}"
           )
 
-        File.mkdir_p!(workflow_root)
-        workflow_file = Path.join(workflow_root, "WORKFLOW.md")
-        write_workflow_file!(workflow_file)
-        Workflow.set_workflow_file_path(workflow_file)
-        if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
+        File.mkdir_p!(instance_config_root)
+        instance_config_file = Path.join(instance_config_root, "instance_config.yml")
+        write_instance_config_file!(instance_config_file)
+        instance_config.set_instance_config_file_path(instance_config_file)
+        if Process.whereis(SymphonyElixir.instance_configStore), do: SymphonyElixir.instance_configStore.force_reload()
         stop_default_http_server()
 
         on_exit(fn ->
-          Application.delete_env(:symphony_elixir, :workflow_file_path)
+          Application.delete_env(:symphony_elixir, :instance_config_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
-          File.rm_rf(workflow_root)
+          File.rm_rf(instance_config_root)
         end)
 
         :ok
@@ -50,13 +50,13 @@ defmodule SymphonyElixir.TestSupport do
     end
   end
 
-  def write_workflow_file!(path, overrides \\ []) do
-    workflow = workflow_content(overrides)
-    File.write!(path, workflow)
+  def write_instance_config_file!(path, overrides \\ []) do
+    instance_config = instance_config_content(overrides)
+    File.write!(path, instance_config)
 
-    if Process.whereis(SymphonyElixir.WorkflowStore) do
+    if Process.whereis(SymphonyElixir.instance_configStore) do
       try do
-        SymphonyElixir.WorkflowStore.force_reload()
+        SymphonyElixir.instance_configStore.force_reload()
       catch
         :exit, _reason -> :ok
       end
@@ -87,7 +87,7 @@ defmodule SymphonyElixir.TestSupport do
     end
   end
 
-  defp workflow_content(overrides) do
+  defp instance_config_content(overrides) do
     config =
       Keyword.merge(
         [
@@ -124,7 +124,7 @@ defmodule SymphonyElixir.TestSupport do
           observability_render_interval_ms: 16,
           server_port: nil,
           server_host: nil,
-          prompt: @workflow_prompt
+          prompt: @instance_config_prompt
         ],
         overrides
       )
