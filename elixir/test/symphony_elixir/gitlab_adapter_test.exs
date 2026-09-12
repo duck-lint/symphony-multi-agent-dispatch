@@ -480,7 +480,6 @@ defmodule SymphonyElixir.GitLab.AdapterTest do
     File.write!(
       path,
       """
-      ---
       tracker:
         kind: gitlab
         provider:
@@ -488,9 +487,6 @@ defmodule SymphonyElixir.GitLab.AdapterTest do
           api_key: #{Jason.encode!(token)}
         active_states: ["opened"]
         terminal_states: ["closed"]
-      ---
-
-      You are working on {{ issue.identifier }}.
       """
     )
 

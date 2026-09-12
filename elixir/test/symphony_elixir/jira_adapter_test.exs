@@ -586,7 +586,6 @@ defmodule SymphonyElixir.Jira.AdapterTest do
     File.write!(
       path,
       """
-      ---
       tracker:
         kind: jira
         provider:
@@ -596,9 +595,6 @@ defmodule SymphonyElixir.Jira.AdapterTest do
           project_key: "SYM"
         active_states: ["To Do"]
         terminal_states: ["Done"]
-      ---
-
-      You are working on {{ issue.identifier }}.
       """
     )
 

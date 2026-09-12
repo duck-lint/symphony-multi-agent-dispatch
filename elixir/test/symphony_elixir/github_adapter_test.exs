@@ -68,7 +68,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
 
     disabled = GitHubAdapter.execute_agent_tool("github_api", %{"method" => "GET", "path" => "/user"}, [])
     refute disabled["success"]
-    assert Jason.decode!(disabled["output"])["supportedTools"] == []
+    assert Jason.decode!(disabled["output"])["error"]["supportedTools"] == []
   end
 
   test "client validates repository settings and declares token environments" do
@@ -468,7 +468,6 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
     File.write!(
       path,
       """
-      ---
       tracker:
         kind: github
         provider:
@@ -476,9 +475,6 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
           token: #{Jason.encode!(token)}
         active_states: ["open"]
         terminal_states: ["closed"]
-      ---
-
-      You are working on {{ issue.identifier }}.
       """
     )
 

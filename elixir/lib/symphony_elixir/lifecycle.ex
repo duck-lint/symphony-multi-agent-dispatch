@@ -89,6 +89,7 @@ defmodule SymphonyElixir.Lifecycle do
   def legal_outcomes(role), do: RoleProfiles.allowed_outcomes(role)
 
   defp transition_for(_role, "await_human", _context), do: {:ok, :await_human}
+
   defp transition_for(:pm, "plan", context) do
     case Map.get(context, :pm_phase, :initial) do
       phase when phase in [:initial, :returning] -> {:ok, :planner}
@@ -208,9 +209,15 @@ defmodule SymphonyElixir.Lifecycle do
     unknown = Map.keys(finding) -- @finding_keys
 
     cond do
-      unknown != [] -> {:error, {:unknown_finding_fields, unknown}}
-      missing != [] -> {:error, {:missing_finding_fields, missing}}
-      finding["severity"] not in ["blocking", "advisory"] -> {:error, :invalid_finding_severity}
+      unknown != [] ->
+        {:error, {:unknown_finding_fields, unknown}}
+
+      missing != [] ->
+        {:error, {:missing_finding_fields, missing}}
+
+      finding["severity"] not in ["blocking", "advisory"] ->
+        {:error, :invalid_finding_severity}
+
       not is_binary(finding["summary"]) or String.trim(finding["summary"]) == "" ->
         {:error, :invalid_finding_summary}
 

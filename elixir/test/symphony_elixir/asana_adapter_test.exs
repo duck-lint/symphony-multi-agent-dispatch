@@ -422,7 +422,6 @@ defmodule SymphonyElixir.Asana.AdapterTest do
     File.write!(
       path,
       """
-      ---
       tracker:
         kind: asana
         provider:
@@ -430,9 +429,6 @@ defmodule SymphonyElixir.Asana.AdapterTest do
           api_key: #{Jason.encode!(token)}
         active_states: ["Todo"]
         terminal_states: ["Done"]
-      ---
-
-      You are working on {{ issue.identifier }}.
       """
     )
 

@@ -363,7 +363,7 @@ defmodule SymphonyElixir.CoreTest do
       description: "Keep one worker active while the orchestrator restarts",
       state: "In Progress",
       url: "https://example.org/issues/MT-#{issue_suffix}",
-      labels: [],
+      labels: ["symphony:role:planner"],
       dispatchable: true
     }
 
@@ -1288,7 +1288,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert prompt =~ "You are executing the SYMPHONY role REVIEWER."
     assert prompt =~ "Review the accepted plan."
-    assert prompt =~ "Accept it or return bounded blocking findings"
+    assert prompt =~ "Produce an evidence-backed verdict"
     assert prompt =~ "symphony.role-result/v1"
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Keep prompt ownership separate"
@@ -1324,6 +1324,7 @@ defmodule SymphonyElixir.CoreTest do
     }
 
     assert PromptBuilder.build_prompt(issue, :pm) =~ "You are executing the SYMPHONY role PM."
+
     assert_raise ArgumentError, fn ->
       PromptBuilder.build_prompt(issue, :pm, %{role_profile: RoleProfiles.profile!(:planner)})
     end
@@ -1690,6 +1691,25 @@ defmodule SymphonyElixir.CoreTest do
       codex_binary = Path.join(test_root, "fake-codex")
       trace_file = Path.join(test_root, "codex.trace")
 
+      result_message =
+        Jason.encode!(%{
+          "method" => "item/completed",
+          "params" => %{
+            "item" => %{
+              "type" => "agentMessage",
+              "text" =>
+                Jason.encode!(%{
+                  "schema" => "symphony.role-result/v1",
+                  "role" => "PLANNER",
+                  "outcome" => "plan_ready",
+                  "summary" => "done",
+                  "evidence" => [],
+                  "findings" => []
+                })
+            }
+          }
+        })
+
       File.mkdir_p!(template_repo)
       File.write!(Path.join(template_repo, "README.md"), "# test")
       System.cmd("git", ["-C", template_repo, "init", "-b", "main"])
@@ -1719,12 +1739,12 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           4)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-cont-1"}}}'
-            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"schema\":\"symphony.role-result/v1\",\"role\":\"PLANNER\",\"outcome\":\"plan_ready\",\"summary\":\"done\",\"evidence\":[],\"findings\":[]}"}}}'
+            printf '%s\\n' '#{result_message}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
           5)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-cont-2"}}}'
-            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"schema\":\"symphony.role-result/v1\",\"role\":\"PLANNER\",\"outcome\":\"plan_ready\",\"summary\":\"done\",\"evidence\":[],\"findings\":[]}"}}}'
+            printf '%s\\n' '#{result_message}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
         esac
@@ -1792,6 +1812,25 @@ defmodule SymphonyElixir.CoreTest do
       codex_binary = Path.join(test_root, "fake-codex")
       trace_file = Path.join(test_root, "codex.trace")
 
+      result_message =
+        Jason.encode!(%{
+          "method" => "item/completed",
+          "params" => %{
+            "item" => %{
+              "type" => "agentMessage",
+              "text" =>
+                Jason.encode!(%{
+                  "schema" => "symphony.role-result/v1",
+                  "role" => "REVIEWER",
+                  "outcome" => "accept",
+                  "summary" => "done",
+                  "evidence" => [],
+                  "findings" => []
+                })
+            }
+          }
+        })
+
       File.mkdir_p!(template_repo)
       File.write!(Path.join(template_repo, "README.md"), "# test")
       System.cmd("git", ["-C", template_repo, "init", "-b", "main"])
@@ -1820,7 +1859,7 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           4)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-max-1"}}}'
-            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"schema\":\"symphony.role-result/v1\",\"role\":\"REVIEWER\",\"outcome\":\"accept\",\"summary\":\"done\",\"evidence\":[],\"findings\":[]}"}}}'
+            printf '%s\\n' '#{result_message}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
         esac

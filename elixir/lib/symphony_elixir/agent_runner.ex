@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
+
   alias SymphonyElixir.{
     Config,
     Lifecycle,
@@ -14,6 +15,7 @@ defmodule SymphonyElixir.AgentRunner do
     RoleRuntimePolicy,
     Workspace
   }
+
   alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
@@ -204,9 +206,7 @@ defmodule SymphonyElixir.AgentRunner do
             {:ok, Map.put(turn_session, :result, result)}
 
           {:error, reason} ->
-            Logger.warning(
-              "Invalid #{RoleProfiles.role_name(role)} role result for #{issue_context(issue)}: #{inspect(reason)}"
-            )
+            Logger.warning("Invalid #{RoleProfiles.role_name(role)} role result for #{issue_context(issue)}: #{inspect(reason)}")
 
             {:error, {:invalid_role_result, reason}}
         end
@@ -291,8 +291,7 @@ defmodule SymphonyElixir.AgentRunner do
        when is_pid(recipient) and is_binary(issue_id) do
     send(
       recipient,
-      {:role_execution_failed, issue_id,
-       %{kind: :pm_continuity, role: :pm, reason: reason}}
+      {:role_execution_failed, issue_id, %{kind: :pm_continuity, role: :pm, reason: reason}}
     )
   end
 

@@ -15,9 +15,9 @@ defmodule SymphonyElixir.PMThreadState do
   @state_subdirectory "pm_threads"
 
   @type record :: %{
-          "schema" => String.t(),
-          "lifecycle_id" => String.t(),
-          "thread_id" => String.t()
+          schema: String.t(),
+          lifecycle_id: String.t(),
+          thread_id: String.t()
         }
 
   @spec schema() :: String.t()
@@ -28,8 +28,12 @@ defmodule SymphonyElixir.PMThreadState do
   def resolve(issue_id, lifecycle_id, phase)
       when is_binary(issue_id) and is_binary(lifecycle_id) and phase in [:initial, :returning] do
     case load(issue_id) do
-      :missing when phase == :initial -> {:new, :missing}
-      :missing -> {:error, :pm_thread_state_missing}
+      :missing when phase == :initial ->
+        {:new, :missing}
+
+      :missing ->
+        {:error, :pm_thread_state_missing}
+
       {:ok, %{"lifecycle_id" => ^lifecycle_id, "thread_id" => thread_id}} ->
         {:resume, thread_id}
 
@@ -42,7 +46,8 @@ defmodule SymphonyElixir.PMThreadState do
       {:error, reason} when phase == :initial ->
         {:new, {:replaceable_stale_state, reason}}
 
-      {:error, reason} -> {:error, {:pm_thread_state_unusable, reason}}
+      {:error, reason} ->
+        {:error, {:pm_thread_state_unusable, reason}}
     end
   end
 
@@ -95,8 +100,11 @@ defmodule SymphonyElixir.PMThreadState do
           {:error, reason} -> {:error, {:malformed_pm_thread_state, path, reason}}
         end
 
-      {:ok, _value} -> {:error, {:malformed_pm_thread_state, path, :not_a_map}}
-      {:error, reason} -> {:error, {:malformed_pm_thread_state, path, {:json, reason}}}
+      {:ok, _value} ->
+        {:error, {:malformed_pm_thread_state, path, :not_a_map}}
+
+      {:error, reason} ->
+        {:error, {:malformed_pm_thread_state, path, {:json, reason}}}
     end
   end
 
@@ -106,9 +114,15 @@ defmodule SymphonyElixir.PMThreadState do
     unknown = keys -- @allowed_keys
 
     cond do
-      missing != [] -> {:error, {:missing_fields, missing}}
-      unknown != [] -> {:error, {:unknown_fields, unknown}}
-      record["schema"] != @schema -> {:error, {:invalid_schema, record["schema"]}}
+      missing != [] ->
+        {:error, {:missing_fields, missing}}
+
+      unknown != [] ->
+        {:error, {:unknown_fields, unknown}}
+
+      record["schema"] != @schema ->
+        {:error, {:invalid_schema, record["schema"]}}
+
       true ->
         with :ok <- validate_identifier(record["lifecycle_id"], :lifecycle_id),
              :ok <- validate_identifier(record["thread_id"], :thread_id) do
@@ -189,7 +203,9 @@ defmodule SymphonyElixir.PMThreadState do
     case File.write(temporary_path, content, [:binary]) do
       :ok ->
         case File.rename(temporary_path, path) do
-          :ok -> :ok
+          :ok ->
+            :ok
+
           {:error, reason} ->
             _ = File.rm(temporary_path)
             {:error, {:pm_thread_state_replace_failed, path, reason}}

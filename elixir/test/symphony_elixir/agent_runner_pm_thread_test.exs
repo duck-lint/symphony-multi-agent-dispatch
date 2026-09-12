@@ -34,6 +34,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
 
     try do
       File.mkdir_p!(workspace_root)
+
       write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
@@ -49,8 +50,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
                  pm_phase: :initial
                )
 
-      assert_receive {:role_execution_completed, "issue-pm-first",
-                      %{role: :pm, thread_id: "thread-pm-first"}}
+      assert_receive {:role_execution_completed, "issue-pm-first", %{role: :pm, thread_id: "thread-pm-first"}}
 
       assert {:ok, %{"lifecycle_id" => "life-1", "thread_id" => "thread-pm-first"}} =
                PMThreadState.load(issue.id)
@@ -67,6 +67,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
 
     try do
       File.mkdir_p!(workspace_root)
+
       write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
@@ -83,8 +84,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
                  pm_phase: :returning
                )
 
-      assert_receive {:role_execution_completed, "issue-pm-returning",
-                      %{role: :pm, thread_id: "thread-pm-existing"}}
+      assert_receive {:role_execution_completed, "issue-pm-returning", %{role: :pm, thread_id: "thread-pm-existing"}}
 
       trace = File.read!(trace_path)
       refute trace =~ "\"method\":\"thread/start\""
@@ -102,6 +102,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
 
     try do
       File.mkdir_p!(workspace_root)
+
       write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
@@ -133,6 +134,12 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
     state_path = if state_path, do: String.replace(state_path, "\\", "/")
     result = role_result("PM", "plan", "PM handoff")
 
+    result_message =
+      Jason.encode!(%{
+        "method" => "item/completed",
+        "params" => %{"item" => %{"type" => "agentMessage", "text" => result}}
+      })
+
     turn_case =
       case mode do
         :fresh ->
@@ -141,7 +148,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
           4)
             test -f "#{state_path}" || exit 1
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-pm"}}}'
-            printf '%s\\n' '#{result}'
+            printf '%s\\n' '#{result_message}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -151,7 +158,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
           """
           3)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-pm"}}}'
-            printf '%s\\n' '#{result}'
+            printf '%s\\n' '#{result_message}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -179,6 +186,12 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
   defp write_specialist_fixture!(path) do
     result = role_result("PLANNER", "plan_ready", "planner handoff")
 
+    result_message =
+      Jason.encode!(%{
+        "method" => "item/completed",
+        "params" => %{"item" => %{"type" => "agentMessage", "text" => result}}
+      })
+
     File.write!(path, """
     #!/bin/sh
     count=0
@@ -190,7 +203,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
         3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-fresh"}}}' ;;
         4)
           printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-fresh"}}}'
-          printf '%s\\n' '#{result}'
+          printf '%s\\n' '#{result_message}'
           printf '%s\\n' '{"method":"turn/completed"}'
           exit 0
           ;;

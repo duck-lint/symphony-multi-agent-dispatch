@@ -50,7 +50,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       end
 
       Application.delete_env(:symphony_elixir, :lifecycle_fake_github_state)
-      Agent.stop(agent)
+      if Process.alive?(agent), do: Agent.stop(agent)
     end)
 
     :ok
@@ -61,6 +61,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert {:ok, %{history: %{lifecycle_id: lifecycle_id}}} = LifecycleCoordinator.prepare_dispatch(issue)
 
     result = role_result("PM", "plan", "Plan accepted intent")
+
     assert {:ok, %{idempotent?: false, event: event, issue: projected}} =
              LifecycleCoordinator.commit_role_result(issue, :pm, result)
 
@@ -102,9 +103,13 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
 
   test "a destination label without its durable event is blocked" do
     Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
-      %{state | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:planner"]}, comments: [
-        %{"body" => LifecycleHistory.render(LifecycleHistory.start_event("life-1"), "started")}
-      ]}
+      %{
+        state
+        | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:planner"]},
+          comments: [
+            %{"body" => LifecycleHistory.render(LifecycleHistory.start_event("life-1"), "started")}
+          ]
+      }
     end)
 
     assert {:skip, {:blocked_lifecycle, _reason}} = LifecycleCoordinator.prepare_dispatch(github_issue())

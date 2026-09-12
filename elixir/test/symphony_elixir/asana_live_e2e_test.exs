@@ -76,7 +76,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
         assert issue_id == issue.id
         assert identifier == issue.identifier
 
-      assert :ok = AgentRunner.run(issue, self(), role: :implementer)
+        assert :ok = AgentRunner.run(issue, self(), role: :implementer)
 
         runtime_info = receive_runtime_info!(issue.id)
         tool_calls = completed_asana_tool_calls(issue.id)

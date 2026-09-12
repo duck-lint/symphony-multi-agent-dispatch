@@ -14,3 +14,18 @@ applicable `AGENTS.md`, harness, and source context.
 The current host includes the pure lifecycle/role kernel, SYMPHONY-owned role profiles, and
 host-enforced role runtime authority. GitHub lifecycle transition persistence remains a separate
 lifecycle seam.
+
+## Linux validation from Windows
+
+When direct Codex-to-WSL execution is unavailable, run Mix through the bounded
+developer bridge:
+
+```powershell
+python scripts/wsl_validation.py --cwd F:\\PROJECT-REPOS\\symphony-multi-agent-dispatch\\elixir -- mix test
+```
+
+The bridge authorizes only this Windows checkout, resolves its mounted WSL path
+with `wslpath`, validates the canonical cwd remains inside the checkout, uses
+Ubuntu-24.04 as `duck-lint`, and launches the declared `mise` toolchain with a
+sterile environment. It is validation tooling only; it does not own lifecycle
+state or create a second source checkout.

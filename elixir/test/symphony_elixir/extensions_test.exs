@@ -103,6 +103,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     File.write!(InstanceConfig.instance_config_file_path(), "tracker: [\n")
     assert {:error, _reason} = InstanceConfigStore.force_reload()
+
     assert {:ok, %{config: %{"polling" => %{"interval_ms" => 45_000}}}} =
              InstanceConfig.current()
 
@@ -113,8 +114,10 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert {:error, {:invalid_instance_config_config, message}} = InstanceConfigStore.force_reload()
     assert message =~ "polling.interval_ms"
+
     assert {:ok, %{config: %{"polling" => %{"interval_ms" => 45_000}}}} =
              InstanceConfig.current()
+
     assert Config.settings!().polling.interval_ms == good_settings.polling.interval_ms
     assert {:error, {:invalid_instance_config_config, _message}} = Config.validate!()
 
@@ -125,13 +128,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :missing_linear_project_slug} = InstanceConfigStore.force_reload()
+
     assert {:ok, %{config: %{"polling" => %{"interval_ms" => 45_000}}}} =
              InstanceConfig.current()
+
     assert Config.settings!().polling.interval_ms == good_settings.polling.interval_ms
     assert {:error, :missing_linear_project_slug} = Config.validate!()
 
     third_instance_config =
       Path.join(Path.dirname(InstanceConfig.instance_config_file_path()), "THIRD_instance_config.yml")
+
     write_instance_config_file!(third_instance_config, poll_interval_ms: 30_000)
     InstanceConfig.set_instance_config_file_path(third_instance_config)
     assert {:ok, %{config: %{"polling" => %{"interval_ms" => 30_000}}}} = InstanceConfig.current()

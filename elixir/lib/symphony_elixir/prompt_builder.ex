@@ -47,6 +47,6 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp profile_for(role, profile) when is_map(profile) do
     raise ArgumentError,
-      "role profile #{inspect(profile[:role])} does not match host-selected role #{inspect(role)}"
+          "role profile #{inspect(profile[:role])} does not match host-selected role #{inspect(role)}"
   end
 end

@@ -17,6 +17,7 @@ defmodule SymphonyElixir.Orchestrator do
     Tracker,
     Workspace
   }
+
   alias SymphonyElixir.Tracker.Issue
 
   @failure_retry_base_ms 10_000
@@ -1103,9 +1104,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp dispatch_prepared_issue(%State{} = state, issue, handoff, attempt, preferred_worker_host) do
     case role_profile_for_dispatch(issue) do
       {:error, reason} ->
-        Logger.warning(
-          "Skipping dispatch for #{issue_context(issue)}; invalid lifecycle role state: #{inspect(reason)}"
-        )
+        Logger.warning("Skipping dispatch for #{issue_context(issue)}; invalid lifecycle role state: #{inspect(reason)}")
 
         release_issue_claim(state, issue.id)
 

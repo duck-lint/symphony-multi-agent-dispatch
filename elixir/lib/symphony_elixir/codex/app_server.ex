@@ -11,6 +11,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @turn_start_id 3
   @port_line_bytes 1_048_576
   @max_stream_log_bytes 1_000
+  @pending_response_messages_key {__MODULE__, :pending_response_messages}
   @type session :: %{
           port: port(),
           metadata: map(),
@@ -49,39 +50,37 @@ defmodule SymphonyElixir.Codex.AppServer do
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
          {:ok, session_policies} <- session_policies(expanded_workspace, worker_host, role_policy),
          {:ok, port} <- start_port(expanded_workspace, worker_host, role_dynamic_tool_binding) do
-      with
-           {:ok, thread_id} <-
-             do_start_session(
-               port,
-               expanded_workspace,
-               session_policies,
-               role_dynamic_tool_binding,
-               requested_thread_id
-             ) do
-        metadata =
-          port_metadata(port, worker_host)
-          |> maybe_put_authority_snapshot(role_policy)
+      case do_start_session(
+             port,
+             expanded_workspace,
+             session_policies,
+             role_dynamic_tool_binding,
+             requested_thread_id
+           ) do
+        {:ok, thread_id} ->
+          metadata =
+            port_metadata(port, worker_host)
+            |> maybe_put_authority_snapshot(role_policy)
 
-        {:ok,
-         %{
-           port: port,
-           metadata: metadata,
-           approval_policy: session_policies.approval_policy,
-           # A role-bound session never turns Codex approval into a second
-           # authority channel. The sandbox is the authority boundary; an
-           # approval request is therefore surfaced as a failed turn.
-           auto_approve_requests:
-             is_nil(role_policy) and session_policies.approval_policy == "never",
-           thread_sandbox: session_policies.thread_sandbox,
-           turn_sandbox_policy: session_policies.turn_sandbox_policy,
-           thread_id: thread_id,
-           workspace: expanded_workspace,
-           worker_host: worker_host,
-           dynamic_tool_binding: role_dynamic_tool_binding,
-           role_bound: not is_nil(role_policy),
-           authority_snapshot: authority_snapshot(role_policy)
-         }}
-      else
+          {:ok,
+           %{
+             port: port,
+             metadata: metadata,
+             approval_policy: session_policies.approval_policy,
+             # A role-bound session never turns Codex approval into a second
+             # authority channel. The sandbox is the authority boundary; an
+             # approval request is therefore surfaced as a failed turn.
+             auto_approve_requests: is_nil(role_policy) and session_policies.approval_policy == "never",
+             thread_sandbox: session_policies.thread_sandbox,
+             turn_sandbox_policy: session_policies.turn_sandbox_policy,
+             thread_id: thread_id,
+             workspace: expanded_workspace,
+             worker_host: worker_host,
+             dynamic_tool_binding: role_dynamic_tool_binding,
+             role_bound: not is_nil(role_policy),
+             authority_snapshot: authority_snapshot(role_policy)
+           }}
+
         {:error, reason} ->
           stop_port(port)
           {:error, reason}
@@ -393,7 +392,8 @@ defmodule SymphonyElixir.Codex.AppServer do
           requested_thread_id
         )
 
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -510,35 +510,50 @@ defmodule SymphonyElixir.Codex.AppServer do
          auto_approve_requests,
          completed_agent_messages
        ) do
-    receive do
-      {^port, {:data, {:eol, chunk}}} ->
-        complete_line = pending_line <> to_string(chunk)
+    case take_pending_response_message(port) do
+      {:ok, data} ->
         handle_incoming(
           port,
           on_message,
-          complete_line,
+          data,
           timeout_ms,
           tool_executor,
           auto_approve_requests,
           completed_agent_messages
         )
 
-      {^port, {:data, {:noeol, chunk}}} ->
-        receive_loop(
-          port,
-          on_message,
-          timeout_ms,
-          pending_line <> to_string(chunk),
-          tool_executor,
-          auto_approve_requests,
-          completed_agent_messages
-        )
+      :empty ->
+        receive do
+          {^port, {:data, {:eol, chunk}}} ->
+            complete_line = pending_line <> to_string(chunk)
 
-      {^port, {:exit_status, status}} ->
-        {:error, {:port_exit, status}}
-    after
-      timeout_ms ->
-        {:error, :turn_timeout}
+            handle_incoming(
+              port,
+              on_message,
+              complete_line,
+              timeout_ms,
+              tool_executor,
+              auto_approve_requests,
+              completed_agent_messages
+            )
+
+          {^port, {:data, {:noeol, chunk}}} ->
+            receive_loop(
+              port,
+              on_message,
+              timeout_ms,
+              pending_line <> to_string(chunk),
+              tool_executor,
+              auto_approve_requests,
+              completed_agent_messages
+            )
+
+          {^port, {:exit_status, status}} ->
+            {:error, {:port_exit, status}}
+        after
+          timeout_ms ->
+            {:error, :turn_timeout}
+        end
     end
   end
 
@@ -756,6 +771,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           )
 
           Logger.debug("Codex notification: #{inspect(method)}")
+
           receive_loop(
             port,
             on_message,
@@ -1155,11 +1171,30 @@ defmodule SymphonyElixir.Codex.AppServer do
 
       {:ok, %{} = other} ->
         Logger.debug("Ignoring message while waiting for response: #{inspect(other)}")
+        stash_pending_response_message(port, payload)
         with_timeout_response(port, request_id, timeout_ms, "")
 
       {:error, _} ->
         log_non_json_stream_line(payload, "response stream")
         with_timeout_response(port, request_id, timeout_ms, "")
+    end
+  end
+
+  defp stash_pending_response_message(port, payload) do
+    key = {@pending_response_messages_key, port}
+    Process.put(key, Process.get(key, []) ++ [payload])
+  end
+
+  defp take_pending_response_message(port) do
+    key = {@pending_response_messages_key, port}
+
+    case Process.get(key, []) do
+      [payload | rest] ->
+        Process.put(key, rest)
+        {:ok, payload}
+
+      [] ->
+        :empty
     end
   end
 

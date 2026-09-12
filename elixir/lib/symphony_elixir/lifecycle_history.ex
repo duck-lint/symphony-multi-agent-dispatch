@@ -92,8 +92,8 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   defp apply_new_event(state, event) do
     case apply_event(state, event) do
-        {:ok, next_state} -> {:cont, {:ok, next_state}}
-        {:error, reason} -> {:halt, {:error, reason}}
+      {:ok, next_state} -> {:cont, {:ok, next_state}}
+      {:error, reason} -> {:halt, {:error, reason}}
     end
   end
 
@@ -143,7 +143,9 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   defp duplicate_status(state, %{"kind" => "lifecycle_started", "lifecycle_id" => lifecycle_id} = event) do
     case Enum.find(state.events, &(&1["kind"] == "lifecycle_started" and &1["lifecycle_id"] == lifecycle_id)) do
-      nil -> :new
+      nil ->
+        :new
+
       existing ->
         if Map.delete(existing, "_human_summary") == Map.delete(event, "_human_summary"),
           do: :duplicate,
@@ -154,7 +156,9 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp duplicate_status(state, %{"transition_id" => transition_id} = event)
        when is_binary(transition_id) do
     case Enum.find(state.events, &(&1["transition_id"] == transition_id)) do
-      nil -> :new
+      nil ->
+        :new
+
       existing ->
         if Map.delete(existing, "_human_summary") == Map.delete(event, "_human_summary"),
           do: :duplicate,
@@ -271,9 +275,9 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   defp validate_findings(_findings), do: {:error, :invalid_lifecycle_event_findings}
 
-  defp valid_finding?(%{\"severity\" => severity, \"summary\" => summary, \"evidence\" => evidence})
-       when severity in [\"blocking\", \"advisory\"] and is_binary(summary) and is_list(evidence) do
-    String.trim(summary) != "" and Enum.all?(evidence, &(is_binary(&1) and String.trim(&1) != \"\"))
+  defp valid_finding?(%{"severity" => severity, "summary" => summary, "evidence" => evidence})
+       when severity in ["blocking", "advisory"] and is_binary(summary) and is_list(evidence) do
+    String.trim(summary) != "" and Enum.all?(evidence, &(is_binary(&1) and String.trim(&1) != ""))
   end
 
   defp valid_finding?(_finding), do: false
@@ -405,6 +409,7 @@ defmodule SymphonyElixir.LifecycleHistory do
   end
 
   defp compare_position(%{round: round, planning_attempt: attempt}, round, attempt), do: :ok
+
   defp compare_position(expected, round, attempt),
     do: {:error, {:invalid_lifecycle_event_position, expected, %{round: round, planning_attempt: attempt}}}
 

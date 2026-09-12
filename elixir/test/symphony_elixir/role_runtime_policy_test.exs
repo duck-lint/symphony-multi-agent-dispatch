@@ -49,11 +49,13 @@ defmodule SymphonyElixir.RoleRuntimePolicyTest do
       File.write!(Path.join(workspace, "source.txt"), "before")
 
       assert {:ok, policy} = RoleRuntimePolicy.for_role(:implementer, workspace)
+
       assert {:ok, %{git_metadata_protection: :externalized}} =
                Workspace.enforce_role_boundary(workspace, policy, nil)
 
       assert File.regular?(Path.join(workspace, ".git"))
       assert File.dir?(Workspace.protected_git_metadata_path(workspace))
+
       refute String.starts_with?(
                Path.expand(Workspace.protected_git_metadata_path(workspace)) <> "/",
                Path.expand(workspace) <> "/"

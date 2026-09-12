@@ -53,7 +53,9 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
            {:ok, comments} <- github_client().fetch_issue_comments(issue_id) do
         case LifecycleHistory.from_comments(comments) do
-          {:ok, history} -> commit_with_history(current_issue, history, expected_role, result)
+          {:ok, history} ->
+            commit_with_history(current_issue, history, expected_role, result)
+
           {:error, reason} ->
             case block_invalid_state(current_issue, nil, reason) do
               {:skip, _blocked} -> {:error, {:lifecycle_history_corrupt, reason}}
@@ -94,7 +96,9 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     with {:ok, validated_result} <- validate_expected_result(result, expected_role),
          idempotent <- idempotent_result(history, current_issue, validated_result, expected_role) do
       case idempotent do
-        {:ok, _commit} = ok -> ok
+        {:ok, _commit} = ok ->
+          ok
+
         :not_found ->
           with :ok <- validate_commit_preconditions(current_issue, history, expected_role),
                {:ok, transition} <- transition_for_commit(history, validated_result),
@@ -140,7 +144,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp event_material_matches_result?(event, result) do
-      Enum.all?(["summary", "evidence", "findings"], fn key -> event[key] == result[key] end) and
+    Enum.all?(["summary", "evidence", "findings"], fn key -> event[key] == result[key] end) and
       Map.get(event, "human_question") == Map.get(result, "human_question") and
       (event["kind"] != "terminal" or
          event["terminal_reason"] == expected_terminal_reason(result))
@@ -643,8 +647,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
         :ok
 
       has_label?(issue.labels, @auto_label) and role == :pm and
-          length(history.events) == 1 and
-          Enum.any?(history.events, &(&1["kind"] == "lifecycle_started")) and
+        length(history.events) == 1 and
+        Enum.any?(history.events, &(&1["kind"] == "lifecycle_started")) and
           Enum.any?(issue.labels, &state_label?/1) ->
         project_and_verify(issue, %{kind: "transition", to_role: :pm})
         |> case do

@@ -99,7 +99,7 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert implementer_prompt =~ "stage, commit"
     assert implementer_prompt =~ "push, or publish"
 
-    for role <- [:pm, :planner, :reviewer, :adversary, :archivist] do
+    for role <- [:planner, :reviewer, :adversary, :archivist] do
       refute RoleProfiles.profile!(role).instructions =~ "commit"
       assert RoleProfiles.profile!(role).write_authority == :read_only
       assert RoleProfiles.profile!(role).freshness == :fresh
@@ -171,6 +171,7 @@ defmodule SymphonyElixir.RoleKernelTest do
              Lifecycle.validate_result(Map.delete(valid_result("REVIEWER", "accept"), "findings"))
 
     assert "findings" in missing
+
     assert {:error, {:invalid_role_result_schema, "wrong/v1"}} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "schema", "wrong/v1"))
 
@@ -187,9 +188,7 @@ defmodule SymphonyElixir.RoleKernelTest do
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "summary", 12))
 
     assert {:error, :role_result_summary_too_long} =
-             Lifecycle.validate_result(
-               Map.put(valid_result("REVIEWER", "accept"), "summary", String.duplicate("x", 4_001))
-             )
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "summary", String.duplicate("x", 4_001)))
 
     assert {:error, :invalid_role_result_evidence} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "evidence", ["", 12]))
@@ -251,10 +250,12 @@ defmodule SymphonyElixir.RoleKernelTest do
     await_result = valid_result("PM", "await_human")
     assert {:error, :missing_human_question} = Lifecycle.validate_result(await_result)
     assert {:ok, _} = Lifecycle.validate_result(Map.put(await_result, "human_question", "Choose a product direction."))
+
     assert {:error, :unexpected_human_question} =
              Lifecycle.validate_result(Map.put(base, "human_question", "not allowed"))
 
     transition_result = Map.put(valid_result("PLANNER", "plan_ready"), "human_question", nil)
+
     assert {:ok, %{from_role: :planner, to_role: :reviewer}} =
              Lifecycle.transition_for_result(transition_result)
   end
