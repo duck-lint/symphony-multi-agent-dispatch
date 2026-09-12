@@ -79,11 +79,11 @@ defmodule SymphonyElixir.MixProject do
       {:phoenix, "~> 1.8.0"},
       {:phoenix_html, "~> 4.2"},
       {:phoenix_live_view, "~> 1.1.0"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.1"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
       {:solid, "~> 1.2"},
-      {:ecto, "~> 3.13"},
+      {:ecto, "~> 3.14"},
       {:burrito, "~> 1.5", only: :prod, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false}
