@@ -503,7 +503,7 @@ defmodule SymphonyElixir.LiveE2ETest do
           observability_enabled: false
         )
 
-        assert :ok = AgentRunner.run(issue, self(), max_turns: 3)
+        assert :ok = AgentRunner.run(issue, self(), role: :implementer)
 
         runtime_info = receive_runtime_info!(issue.id)
 

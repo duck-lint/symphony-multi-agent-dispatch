@@ -2,8 +2,8 @@ defmodule SymphonyElixir.InstanceConfig do
   @moduledoc """
   Loads plain YAML runtime configuration from `.symphony/instance_config.yml`.
 
-  The instance configuration contains no prompt body. Prompt construction belongs to the
-  host/runtime seam until the later lifecycle work supplies role-owned profiles.
+  The instance configuration contains no prompt body. Prompt construction belongs to
+  the host-owned role-profile seam.
   """
 
   alias SymphonyElixir.InstanceConfigStore

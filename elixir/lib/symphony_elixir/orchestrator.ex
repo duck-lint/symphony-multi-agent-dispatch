@@ -7,10 +7,9 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, RoleProfiles, RoleRouter, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
-  @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
@@ -187,6 +186,28 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info({:codex_worker_update, _issue_id, _update}, state), do: {:noreply, state}
 
+  def handle_info(
+        {:role_execution_completed, issue_id, %{role: role} = completion},
+        %{running: running} = state
+      )
+      when is_binary(issue_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        updated_running_entry =
+          running_entry
+          |> Map.put(:role, role)
+          |> Map.put(:role_execution, completion)
+
+        notify_dashboard()
+        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+    end
+  end
+
+  def handle_info({:role_execution_completed, _issue_id, _completion}, state), do: {:noreply, state}
+
   def handle_info({:retry_issue, issue_id, retry_token}, state) do
     result =
       case pop_retry_attempt_state(state, issue_id, retry_token) do
@@ -209,17 +230,17 @@ defmodule SymphonyElixir.Orchestrator do
     if input_required_blocker?(running_entry) do
       block_input_required_agent_down(state, issue_id, running_entry, session_id, :normal)
     else
-      Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+      Logger.info(
+        "Role execution completed for issue_id=#{issue_id} session_id=#{session_id}; " <>
+          "leaving lifecycle transition uncommitted"
+      )
 
-      state
-      |> complete_issue(issue_id)
-      |> schedule_issue_retry(issue_id, 1, %{
-        identifier: running_entry.identifier,
-        issue_url: running_entry.issue.url,
-        delay_type: :continuation,
-        worker_host: Map.get(running_entry, :worker_host),
-        workspace_path: Map.get(running_entry, :workspace_path)
-      })
+      block_issue_from_entry(
+        state,
+        issue_id,
+        running_entry,
+        "role execution completed; lifecycle transition is not committed"
+      )
     end
   end
 
@@ -405,6 +426,12 @@ defmodule SymphonyElixir.Orchestrator do
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   def select_worker_host_for_test(%State{} = state, preferred_worker_host) do
     select_worker_host(state, preferred_worker_host)
+  end
+
+  @doc false
+  @spec role_profile_for_dispatch_for_test(Issue.t()) :: {:ok, map()} | {:error, term()}
+  def role_profile_for_dispatch_for_test(%Issue{} = issue) do
+    role_profile_for_dispatch(issue)
   end
 
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
@@ -759,6 +786,9 @@ defmodule SymphonyElixir.Orchestrator do
       issue_id: issue_id,
       identifier: Map.get(running_entry, :identifier, issue_id),
       issue: Map.get(running_entry, :issue),
+      role: Map.get(running_entry, :role),
+      role_profile: Map.get(running_entry, :role_profile),
+      role_execution: Map.get(running_entry, :role_execution),
       worker_host: Map.get(running_entry, :worker_host),
       workspace_path: Map.get(running_entry, :workspace_path),
       session_id: running_entry_session_id(running_entry),
@@ -938,21 +968,50 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
-    recipient = self()
+    case role_profile_for_dispatch(issue) do
+      {:error, reason} ->
+        Logger.warning(
+          "Skipping dispatch for #{issue_context(issue)}; invalid lifecycle role state: #{inspect(reason)}"
+        )
 
-    case select_worker_host(state, preferred_worker_host) do
-      :no_worker_capacity ->
-        Logger.debug("No SSH worker slots available for #{issue_context(issue)} preferred_worker_host=#{inspect(preferred_worker_host)}")
-        state
+        release_issue_claim(state, issue.id)
 
-      worker_host ->
-        spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+      {:ok, role_profile} ->
+        recipient = self()
+
+        case select_worker_host(state, preferred_worker_host) do
+          :no_worker_capacity ->
+            Logger.debug(
+              "No SSH worker slots available for #{issue_context(issue)} " <>
+                "preferred_worker_host=#{inspect(preferred_worker_host)}"
+            )
+
+            state
+
+          worker_host ->
+            spawn_issue_on_worker_host(
+              state,
+              issue,
+              attempt,
+              recipient,
+              worker_host,
+              role_profile.role,
+              role_profile
+            )
+        end
     end
   end
 
-  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, role, role_profile) do
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+           AgentRunner.run(
+             issue,
+             recipient,
+             attempt: attempt,
+             worker_host: worker_host,
+             role: role,
+             role_profile: role_profile
+           )
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -965,6 +1024,9 @@ defmodule SymphonyElixir.Orchestrator do
             ref: ref,
             identifier: issue.identifier,
             issue: issue,
+            role: role,
+            role_profile: role_profile,
+            role_execution: nil,
             worker_host: worker_host,
             workspace_path: nil,
             session_id: nil,
@@ -1022,14 +1084,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
-
-  defp complete_issue(%State{} = state, issue_id) do
-    %{
-      state
-      | completed: MapSet.put(state.completed, issue_id),
-        retry_attempts: Map.delete(state.retry_attempts, issue_id)
-    }
-  end
 
   defp schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
        when is_binary(issue_id) and is_map(metadata) do
@@ -1229,12 +1283,8 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
-    if metadata[:delay_type] == :continuation and attempt == 1 do
-      @continuation_retry_delay_ms
-    else
-      failure_retry_delay(attempt)
-    end
+  defp retry_delay(attempt, _metadata) when is_integer(attempt) and attempt > 0 do
+    failure_retry_delay(attempt)
   end
 
   defp failure_retry_delay(attempt) do
@@ -1297,6 +1347,10 @@ defmodule SymphonyElixir.Orchestrator do
             least_loaded_worker_host(state, available_hosts)
         end
     end
+  end
+
+  defp role_profile_for_dispatch(%Issue{} = issue) do
+    RoleRouter.profile_for_issue(issue)
   end
 
   defp preferred_worker_host_available?(preferred_worker_host, hosts)

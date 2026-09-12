@@ -1,64 +1,49 @@
 defmodule SymphonyElixir.PromptBuilder do
   @moduledoc """
-  Builds agent prompts from normalized tracker work item data.
+  Builds a role-specific SYMPHONY prompt from host-selected profile and issue context.
 
-  This temporary host-owned prompt exists only to keep the pre-lifecycle runtime executable.
-  It deliberately does not read prompt content from InstanceConfig; the lifecycle task will
-  replace this seam with SYMPHONY-owned role profiles.
+  Role selection is an input from the host. This module does not inspect issue labels
+  and does not read project-local instance configuration for prompt content.
   """
 
-  @render_opts [strict_variables: true, strict_filters: true]
+  alias SymphonyElixir.RoleProfiles
+  alias SymphonyElixir.Tracker.Issue
 
-  @temporary_prompt_template """
-  You are working on an issue from the configured tracker.
+  @spec build_prompt(Issue.t(), RoleProfiles.role(), map()) :: String.t()
+  def build_prompt(%Issue{} = issue, role, context \\ %{}) when is_map(context) do
+    profile = profile_for(role, Map.get(context, :role_profile) || RoleProfiles.profile!(role))
+    handoff = Map.get(context, :handoff)
 
-  Identifier: {{ issue.identifier }}
-  Title: {{ issue.title }}
+    """
+    You are executing the SYMPHONY role #{profile.name}.
 
-  Body:
-  {% if issue.description %}
-  {{ issue.description }}
-  {% else %}
-  No description provided.
-  {% endif %}
-  """
+    Role instructions:
+    #{String.trim(profile.instructions)}
 
-  @spec build_prompt(SymphonyElixir.Tracker.Issue.t(), keyword()) :: String.t()
-  def build_prompt(issue, opts \\ []) do
-    template = parse_template!(@temporary_prompt_template)
+    #{RoleProfiles.result_contract_instructions()}
 
-    template
-    |> Solid.render!(
-      %{
-        "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
-      },
-      @render_opts
-    )
-    |> IO.iodata_to_binary()
+    Host-supplied handoff/context:
+    #{format_context(handoff)}
+
+    Issue context:
+    Identifier: #{issue.identifier || "(missing)"}
+    Title: #{issue.title || "(missing)"}
+    State: #{issue.state || "(missing)"}
+    URL: #{issue.url || "(missing)"}
+    Body:
+    #{issue.description || "No description provided."}
+    """
+    |> String.trim()
   end
 
-  defp parse_template!(prompt) when is_binary(prompt) do
-    Solid.parse!(prompt)
-  rescue
-    error ->
-      reraise %RuntimeError{
-                message: "template_parse_error: #{Exception.message(error)} template=#{inspect(prompt)}"
-              },
-              __STACKTRACE__
+  defp format_context(nil), do: "No additional handoff was supplied."
+  defp format_context(context) when is_binary(context), do: context
+  defp format_context(context), do: inspect(context, pretty: true)
+
+  defp profile_for(role, %{role: role} = profile), do: profile
+
+  defp profile_for(role, profile) when is_map(profile) do
+    raise ArgumentError,
+      "role profile #{inspect(profile[:role])} does not match host-selected role #{inspect(role)}"
   end
-
-  defp to_solid_map(map) when is_map(map) do
-    Map.new(map, fn {key, value} -> {to_string(key), to_solid_value(value)} end)
-  end
-
-  defp to_solid_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  defp to_solid_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
-  defp to_solid_value(%Date{} = value), do: Date.to_iso8601(value)
-  defp to_solid_value(%Time{} = value), do: Time.to_iso8601(value)
-  defp to_solid_value(%_{} = value), do: value |> Map.from_struct() |> to_solid_map()
-  defp to_solid_value(value) when is_map(value), do: to_solid_map(value)
-  defp to_solid_value(value) when is_list(value), do: Enum.map(value, &to_solid_value/1)
-  defp to_solid_value(value), do: value
-
 end

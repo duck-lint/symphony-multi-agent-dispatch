@@ -76,7 +76,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
         assert issue_id == issue.id
         assert identifier == issue.identifier
 
-        assert :ok = AgentRunner.run(issue, self(), max_turns: 3)
+      assert :ok = AgentRunner.run(issue, self(), role: :implementer)
 
         runtime_info = receive_runtime_info!(issue.id)
         tool_calls = completed_asana_tool_calls(issue.id)
@@ -141,7 +141,6 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
       workspace:
         root: #{Jason.encode!(workspace_root)}
       agent:
-        max_turns: 3
       codex:
         command: #{Jason.encode!("env CODEX_HOME=#{shell_escape(codex_home)} codex app-server")}
         approval_policy: "never"

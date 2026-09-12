@@ -1,0 +1,204 @@
+defmodule SymphonyElixir.RoleKernelTest do
+  use SymphonyElixir.TestSupport
+
+  @roles [
+    {:pm, "PM", "symphony:role:pm"},
+    {:planner, "PLANNER", "symphony:role:planner"},
+    {:reviewer, "REVIEWER", "symphony:role:reviewer"},
+    {:implementer, "IMPLEMENTER", "symphony:role:implementer"},
+    {:adversary, "ADVERSARY", "symphony:role:adversary"},
+    {:archivist, "ARCHIVIST", "symphony:role:archivist"}
+  ]
+
+  test "role labels map exactly to canonical roles and ignore unrelated labels" do
+    for {role, _name, label} <- @roles do
+      assert {:ok, ^role} = RoleProfiles.role_for_labels(["unrelated", String.upcase(label)])
+      assert {:ok, ^role} = RoleRouter.role_for_issue(%Issue{labels: [label]})
+    end
+  end
+
+  test "zero or multiple lifecycle role labels are invalid" do
+    assert {:error, :missing_role_label} = RoleProfiles.role_for_labels(["symphony:auto", "backend"])
+
+    assert {:error, {:multiple_role_labels, roles}} =
+             RoleProfiles.role_for_labels([
+               "symphony:role:pm",
+               "SYMPHONY:ROLE:PLANNER",
+               "backend"
+             ])
+
+    assert Enum.sort(roles) == [:planner, :pm]
+    assert {:error, :missing_role_label} = RoleRouter.role_for_issue(%Issue{labels: []})
+  end
+
+  test "dispatch derives a profile only from a valid issue role label" do
+    issue = %Issue{labels: ["symphony:role:planner", "backend"]}
+    assert {:ok, %{role: :planner}} = Orchestrator.role_profile_for_dispatch_for_test(issue)
+
+    assert {:error, :missing_role_label} =
+             Orchestrator.role_profile_for_dispatch_for_test(%Issue{labels: []})
+
+    assert {:error, {:multiple_role_labels, _roles}} =
+             Orchestrator.role_profile_for_dispatch_for_test(%Issue{
+               labels: ["symphony:role:pm", "symphony:role:planner"]
+             })
+  end
+
+  test "role profile metadata defines freshness, thread, authority, and outcomes" do
+    assert RoleProfiles.roles() == Enum.map(@roles, &elem(&1, 0))
+
+    for {role, name, label} <- @roles do
+      profile = RoleProfiles.profile!(role)
+      assert profile.role == role
+      assert profile.name == name
+      assert profile.label == label
+      assert is_binary(profile.instructions)
+      assert is_list(profile.allowed_outcomes)
+      assert RoleProfiles.role_label(role) == label
+      assert RoleProfiles.role_name(role) == name
+    end
+
+    assert RoleProfiles.profile!(:pm).freshness == :task_scoped
+    assert RoleProfiles.profile!(:pm).thread_policy == :persistent
+    assert RoleProfiles.profile!(:pm).write_authority == :read_only
+    assert RoleProfiles.profile!(:implementer).freshness == :fresh
+    assert RoleProfiles.profile!(:implementer).thread_policy == :fresh
+    assert RoleProfiles.profile!(:implementer).write_authority == :project_write
+    assert {:error, {:unknown_role, :architect}} = RoleProfiles.profile(:architect)
+    assert_raise ArgumentError, fn -> RoleProfiles.profile!(:architect) end
+    assert RoleProfiles.role_for_label(:not_a_label) == []
+    assert RoleProfiles.role_for_labels(:not_a_list) == {:error, :missing_role_label}
+    assert RoleProfiles.result_contract_instructions() =~ "Do not emit next_role"
+  end
+
+  test "legal lifecycle transitions are host-owned" do
+    assert Lifecycle.transition(:pm, :plan, %{pm_phase: :initial}) == {:ok, :planner}
+    assert Lifecycle.transition(:pm, "plan", %{pm_phase: :returning}) == {:ok, :planner}
+
+    assert Lifecycle.transition(:planner, "plan_ready") == {:ok, :reviewer}
+    assert Lifecycle.transition(:reviewer, "revise") == {:ok, :planner}
+    assert Lifecycle.transition(:reviewer, "accept", %{findings: []}) == {:ok, :implementer}
+    assert Lifecycle.transition(:implementer, "implementation_complete") == {:ok, :adversary}
+    assert Lifecycle.transition(:adversary, "review_complete") == {:ok, :pm}
+
+    returning_context = %{
+      pm_phase: :returning,
+      completed_working_round?: true,
+      preceding_adversary_findings: []
+    }
+
+    assert Lifecycle.transition(:pm, "converge", returning_context) == {:ok, :archivist}
+    assert Lifecycle.transition(:archivist, "archive_complete") == {:ok, :lifecycle_complete}
+
+    for role <- RoleProfiles.roles() do
+      assert Lifecycle.transition(role, "await_human") == {:ok, :await_human}
+    end
+  end
+
+  test "illegal lifecycle transitions and initial PM convergence are rejected" do
+    assert Lifecycle.transition(:pm, "converge", %{pm_phase: :initial}) ==
+             {:error, :initial_pm_cannot_converge}
+
+    assert Lifecycle.transition(:pm, "converge", %{pm_phase: :returning}) ==
+             {:error, :pm_convergence_precondition_not_met}
+
+    assert Lifecycle.transition(:pm, "converge", %{
+             pm_phase: :returning,
+             completed_working_round?: true,
+             preceding_adversary_findings: [%{"severity" => "blocking"}]
+           }) == {:error, :blocking_adversary_findings}
+
+    assert Lifecycle.transition(:pm, "plan", %{pm_phase: :unexpected}) ==
+             {:error, {:invalid_pm_phase, :unexpected}}
+
+    assert Lifecycle.transition(:reviewer, "accept", %{
+             findings: [%{"severity" => "blocking"}]
+           }) == {:error, :reviewer_accept_has_blocking_findings}
+
+    assert Lifecycle.transition(:archivist, "plan_ready") ==
+             {:error, {:invalid_role_outcome, :archivist, "plan_ready"}}
+
+    assert Lifecycle.transition(:planner, "accept") ==
+             {:error, {:invalid_role_outcome, :planner, "accept"}}
+
+    assert Lifecycle.transition(:not_a_role, "plan") == {:error, {:unknown_role, :not_a_role}}
+  end
+
+  test "role result validation is strict and does not accept model routing authority" do
+    assert {:ok, result} = Lifecycle.validate_result(valid_result("REVIEWER", "accept"))
+    assert result["schema"] == "symphony.role-result/v1"
+
+    assert {:error, {:unknown_role_result_fields, ["next_role"]}} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "next_role", "IMPLEMENTER"))
+
+    assert {:error, {:missing_role_result_fields, missing}} =
+             Lifecycle.validate_result(Map.delete(valid_result("REVIEWER", "accept"), "findings"))
+
+    assert "findings" in missing
+    assert {:error, {:invalid_role_result_schema, "wrong/v1"}} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "schema", "wrong/v1"))
+
+    assert {:error, {:invalid_role_result_role, "ARCHITECT"}} =
+             Lifecycle.validate_result(valid_result("ARCHITECT", "accept"))
+
+    assert {:error, {:invalid_role_outcome, :reviewer, "plan_ready"}} =
+             Lifecycle.validate_result(valid_result("REVIEWER", "plan_ready"))
+
+    assert {:error, :empty_role_result_summary} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "summary", "  "))
+
+    assert {:error, :invalid_role_result_summary} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "summary", 12))
+
+    assert {:error, :role_result_summary_too_long} =
+             Lifecycle.validate_result(
+               Map.put(valid_result("REVIEWER", "accept"), "summary", String.duplicate("x", 4_001))
+             )
+
+    assert {:error, :invalid_role_result_evidence} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "evidence", ["", 12]))
+
+    assert {:error, :invalid_role_result_findings} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", :none))
+  end
+
+  test "finding severity, human question, and transition result validation are bounded" do
+    base = valid_result("REVIEWER", "accept")
+
+    assert {:error, {:unknown_finding_fields, ["extra"]}} =
+             Lifecycle.validate_result(Map.put(base, "findings", [%{"severity" => "advisory", "summary" => "ok", "evidence" => [], "extra" => true}]))
+
+    assert {:error, {:missing_finding_fields, ["evidence"]}} =
+             Lifecycle.validate_result(Map.put(base, "findings", [%{"severity" => "advisory", "summary" => "ok"}]))
+
+    assert {:error, :invalid_finding_severity} =
+             Lifecycle.validate_result(Map.put(base, "findings", [%{"severity" => "critical", "summary" => "bad", "evidence" => []}]))
+
+    assert {:error, :invalid_finding_summary} =
+             Lifecycle.validate_result(Map.put(base, "findings", [%{"severity" => "advisory", "summary" => "", "evidence" => []}]))
+
+    assert {:error, :invalid_finding_evidence} =
+             Lifecycle.validate_result(Map.put(base, "findings", [%{"severity" => "advisory", "summary" => "bad", "evidence" => [1]}]))
+
+    await_result = valid_result("PM", "await_human")
+    assert {:error, :missing_human_question} = Lifecycle.validate_result(await_result)
+    assert {:ok, _} = Lifecycle.validate_result(Map.put(await_result, "human_question", "Choose a product direction."))
+    assert {:error, :unexpected_human_question} =
+             Lifecycle.validate_result(Map.put(base, "human_question", "not allowed"))
+
+    transition_result = Map.put(valid_result("PLANNER", "plan_ready"), "human_question", nil)
+    assert {:ok, %{from_role: :planner, to_role: :reviewer}} =
+             Lifecycle.transition_for_result(transition_result)
+  end
+
+  defp valid_result(role, outcome) do
+    %{
+      "schema" => "symphony.role-result/v1",
+      "role" => role,
+      "outcome" => outcome,
+      "summary" => "bounded result",
+      "evidence" => ["observed evidence"],
+      "findings" => []
+    }
+  end
+end

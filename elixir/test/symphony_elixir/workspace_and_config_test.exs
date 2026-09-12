@@ -1300,7 +1300,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "config supports per-state max concurrent agent overrides" do
     instance_config = """
-    ---
     tracker:
       kind: memory
     agent:
@@ -1309,7 +1308,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         todo: 1
         "In Progress": 4
         "In Review": 2
-    ---
     """
 
     File.write!(InstanceConfig.instance_config_file_path(), instance_config)

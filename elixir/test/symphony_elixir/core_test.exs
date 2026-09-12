@@ -17,7 +17,6 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.active_states == ["Todo", "In Progress"]
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.assignee == nil
-    assert config.agent.max_turns == 20
 
     write_instance_config_file!(InstanceConfig.instance_config_file_path(), poll_interval_ms: "invalid")
 
@@ -27,12 +26,12 @@ defmodule SymphonyElixir.CoreTest do
     write_instance_config_file!(InstanceConfig.instance_config_file_path(), poll_interval_ms: 45_000)
     assert Config.settings!().polling.interval_ms == 45_000
 
-    write_instance_config_file!(InstanceConfig.instance_config_file_path(), max_turns: 0)
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), max_retry_backoff_ms: 0)
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
-    assert message =~ "agent.max_turns"
+    assert message =~ "agent.max_retry_backoff_ms"
 
-    write_instance_config_file!(InstanceConfig.instance_config_file_path(), max_turns: 5)
-    assert Config.settings!().agent.max_turns == 5
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), max_retry_backoff_ms: 5)
+    assert Config.settings!().agent.max_retry_backoff_ms == 5
 
     write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_active_states: "Todo,  Review,")
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
@@ -993,25 +992,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "agent runner does not continue after a required label is removed" do
-    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_required_labels: ["symphony"])
-
-    issue = %Issue{
-      id: "issue-label-continuation",
-      identifier: "MT-563",
-      title: "Stop after opt-out",
-      state: "In Progress",
-      labels: ["symphony"]
-    }
-
-    refreshed_issue = %{issue | labels: []}
-    fetcher = fn ["issue-label-continuation"] -> {:ok, [refreshed_issue]} end
-
-    assert {:done, ^refreshed_issue} =
-             AgentRunner.continue_with_issue_for_test(issue, fetcher)
-  end
-
-  test "normal worker exit schedules active-state continuation retry" do
+  test "normal worker exit parks until the lifecycle transition is committed" do
     issue_id = "issue-resume"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :ContinuationOrchestrator)
@@ -1045,10 +1026,10 @@ defmodule SymphonyElixir.CoreTest do
     state = :sys.get_state(pid)
 
     refute Map.has_key?(state.running, issue_id)
-    assert MapSet.member?(state.completed, issue_id)
-    assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
-    assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+    assert %{error: "role execution completed; lifecycle transition is not committed"} =
+             state.blocked[issue_id]
+    assert MapSet.member?(state.claimed, issue_id)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -1294,9 +1275,7 @@ defmodule SymphonyElixir.CoreTest do
     assert {:ok, []} = Client.fetch_issues_by_states([])
   end
 
-  test "prompt builder uses a temporary host-owned template independent of instance_config" do
-    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "memory")
-
+  test "prompt builder renders the host-selected role profile and issue context" do
     issue = %Issue{
       identifier: "MT-777",
       title: "Keep prompt ownership separate",
@@ -1306,16 +1285,19 @@ defmodule SymphonyElixir.CoreTest do
       labels: []
     }
 
-    prompt = PromptBuilder.build_prompt(issue)
+    prompt = PromptBuilder.build_prompt(issue, :reviewer, %{handoff: "Review the accepted plan."})
 
-    assert prompt =~ "You are working on an issue from the configured tracker."
+    assert prompt =~ "You are executing the SYMPHONY role REVIEWER."
+    assert prompt =~ "Review the accepted plan."
+    assert prompt =~ "Accept it or return bounded blocking findings"
+    assert prompt =~ "symphony.role-result/v1"
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Keep prompt ownership separate"
     assert prompt =~ "Body:"
     assert prompt =~ "The instance config must not supply prompt prose."
   end
 
-  test "prompt builder temporary template handles missing issue body" do
+  test "role prompt handles missing issue body" do
     issue = %Issue{
       identifier: "MT-778",
       title: "Handle empty body",
@@ -1325,14 +1307,14 @@ defmodule SymphonyElixir.CoreTest do
       labels: []
     }
 
-    prompt = PromptBuilder.build_prompt(issue)
+    prompt = PromptBuilder.build_prompt(issue, :planner)
 
     assert prompt =~ "Identifier: MT-778"
     assert prompt =~ "Title: Handle empty body"
     assert prompt =~ "No description provided."
   end
 
-  test "prompt builder does not fail when instance_config is unavailable" do
+  test "prompt builder requires and honors explicit role identity" do
     issue = %Issue{
       identifier: "MT-780",
       title: "instance_config unavailable",
@@ -1342,7 +1324,10 @@ defmodule SymphonyElixir.CoreTest do
       labels: []
     }
 
-    assert PromptBuilder.build_prompt(issue) =~ "Identifier: MT-780"
+    assert PromptBuilder.build_prompt(issue, :pm) =~ "You are executing the SYMPHONY role PM."
+    assert_raise ArgumentError, fn ->
+      PromptBuilder.build_prompt(issue, :pm, %{role_profile: RoleProfiles.profile!(:planner)})
+    end
   end
 
   test "in-repo instance_config.yml is configuration only" do
@@ -1363,9 +1348,11 @@ defmodule SymphonyElixir.CoreTest do
     assert {:ok, %{config: config}} = InstanceConfig.load()
     refute Map.has_key?(config, "prompt")
 
-    prompt = PromptBuilder.build_prompt(issue, attempt: 2)
+    prompt = PromptBuilder.build_prompt(issue, :archivist, %{handoff: "Archive after convergence."})
 
     assert prompt =~ "Identifier: MT-616"
+    assert prompt =~ "You are executing the SYMPHONY role ARCHIVIST."
+    assert prompt =~ "Archive after convergence."
   end
 
   test "agent runner keeps workspace after successful codex run" do
@@ -1432,7 +1419,7 @@ defmodule SymphonyElixir.CoreTest do
       }
 
       before = MapSet.new(File.ls!(workspace_root))
-      assert :ok = AgentRunner.run(issue)
+      assert :ok = AgentRunner.run(issue, nil, role: :implementer)
       entries_after = MapSet.new(File.ls!(workspace_root))
 
       created =
@@ -1523,6 +1510,7 @@ defmodule SymphonyElixir.CoreTest do
                AgentRunner.run(
                  issue,
                  test_pid,
+                 role: :implementer,
                  issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
                )
 
@@ -1599,7 +1587,7 @@ defmodule SymphonyElixir.CoreTest do
       }
 
       assert_raise RuntimeError, ~r/workspace_prepare_failed/, fn ->
-        AgentRunner.run(issue, nil, worker_host: "worker-a")
+        AgentRunner.run(issue, nil, role: :implementer, worker_host: "worker-a")
       end
 
       trace = File.read!(trace_file)
@@ -1610,7 +1598,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "agent runner continues with a follow-up turn while the issue remains active" do
+  test "agent runner performs one role turn while the issue remains active" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1670,50 +1658,20 @@ defmodule SymphonyElixir.CoreTest do
       write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
-        max_turns: 3
+        codex_command: "#{codex_binary} app-server"
       )
-
-      parent = self()
-
-      state_fetcher = fn [_issue_id] ->
-        attempt = Process.get(:agent_turn_fetch_count, 0) + 1
-        Process.put(:agent_turn_fetch_count, attempt)
-        send(parent, {:issue_state_fetch, attempt})
-
-        state =
-          if attempt == 1 do
-            "In Progress"
-          else
-            "Done"
-          end
-
-        {:ok,
-         [
-           %Issue{
-             id: "issue-continue",
-             identifier: "MT-247",
-             title: "Continue until done",
-             description: "Still active after first turn",
-             state: state,
-             dispatchable: true
-           }
-         ]}
-      end
 
       issue = %Issue{
         id: "issue-continue",
         identifier: "MT-247",
-        title: "Continue until done",
+        title: "Perform one role turn",
         description: "Still active after first turn",
         state: "In Progress",
         url: "https://example.org/issues/MT-247",
-        labels: []
+        labels: ["symphony:role:planner"]
       }
 
-      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher)
-      assert_receive {:issue_state_fetch, 1}
-      assert_receive {:issue_state_fetch, 2}
+      assert :ok = AgentRunner.run(issue, nil, role: :planner)
 
       lines = File.read!(trace_file) |> String.split("\n", trim: true)
 
@@ -1731,18 +1689,16 @@ defmodule SymphonyElixir.CoreTest do
           |> Enum.map_join("\n", &Map.get(&1, "text", ""))
         end)
 
-      assert length(turn_texts) == 2
-      assert Enum.at(turn_texts, 0) =~ "You are an agent for this repository."
-      refute Enum.at(turn_texts, 1) =~ "You are an agent for this repository."
-      assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
-      assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
+      assert length(turn_texts) == 1
+      assert Enum.at(turn_texts, 0) =~ "You are executing the SYMPHONY role PLANNER."
+      refute Enum.at(turn_texts, 0) =~ "Continuation guidance:"
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
       File.rm_rf(test_root)
     end
   end
 
-  test "agent runner stops continuing once agent.max_turns is reached" do
+  test "agent runner performs exactly one role turn" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1785,10 +1741,6 @@ defmodule SymphonyElixir.CoreTest do
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-max-1"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
-          5)
-            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-max-2"}}}'
-            printf '%s\\n' '{"method":"turn/completed"}'
-            ;;
         esac
       done
       """)
@@ -1801,39 +1753,24 @@ defmodule SymphonyElixir.CoreTest do
       write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
-        max_turns: 2
+        codex_command: "#{codex_binary} app-server"
       )
-
-      state_fetcher = fn [_issue_id] ->
-        {:ok,
-         [
-           %Issue{
-             id: "issue-max-turns",
-             identifier: "MT-248",
-             title: "Stop at max turns",
-             description: "Still active",
-             state: "In Progress",
-             dispatchable: true
-           }
-         ]}
-      end
 
       issue = %Issue{
         id: "issue-max-turns",
         identifier: "MT-248",
-        title: "Stop at max turns",
+        title: "Perform one role execution",
         description: "Still active",
         state: "In Progress",
         url: "https://example.org/issues/MT-248",
-        labels: []
+        labels: ["symphony:role:reviewer"]
       }
 
-      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher)
+      assert :ok = AgentRunner.run(issue, nil, role: :reviewer)
 
       trace = File.read!(trace_file)
       assert length(String.split(trace, "RUN", trim: true)) == 1
-      assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == 2
+      assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == 1
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
       File.rm_rf(test_root)
