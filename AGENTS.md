@@ -47,7 +47,47 @@ There is no Architect role.
 
 Specialists are fresh executions. PM alone has task-scoped reasoning continuity.
 
-Models may propose outcomes, but host code must validate lifecycle transitions. Models must not directly own role-label mutation, lifecycle closeout, or other lifecycle authority.
+The initial PM must route through Planner; it may not skip directly to Archivist. PM convergence is legal only after at least one complete Implementer → Adversary → PM cycle and no blocking findings in the immediately preceding Adversary result.
+
+Models report structured role outcomes. They do not choose arbitrary next roles. Host code validates the result and maps it onto the legal lifecycle transition.
+
+## Frozen MVP lifecycle state model
+
+For MVP, lifecycle authority is intentionally small:
+
+- GitHub role/state labels are the current lifecycle projection.
+- Append-only host-written GitHub comments are the durable lifecycle history and handoff log.
+- Lifecycle comments use deterministic transition IDs so retries are idempotent.
+- Planning-attempt and working-round budgets are reconstructed from accepted lifecycle history; infrastructure retries do not consume those budgets.
+- PM thread identity is stored in host-owned local state outside the issue workspace and supports same-machine restart continuity.
+- There is no lifecycle SQLite database or mutable lifecycle mega-record.
+
+The benchmark limits are 3 Planner/Reviewer attempts per round and 8 working rounds per lifecycle. Budget exhaustion produces `symphony:state:non-converged`; it is not task success and does not close the issue.
+
+A successful Archivist closeout produces `symphony:state:lifecycle-complete`, removes automation/role labels, leaves the issue open, and leaves the workspace available for later human-authorized disposition/publication.
+
+## Role authority
+
+Role boundaries must be enforced structurally, not by prompt wording alone.
+
+For MVP:
+
+```text
+PM           read-only project access
+Planner      read-only project access
+Reviewer     read-only project access
+Implementer  bounded project-workspace write access
+Adversary    read-only project access
+Archivist    read-only project access
+```
+
+Only Implementer writes project files. Implementer must not mutate `.git`, stage, commit, switch branches, reset, merge, push, or publish. Read-only Git inspection is allowed.
+
+The host also performs no automatic commit, push, PR creation, merge, or publication as part of the lifecycle MVP.
+
+Models receive no GitHub mutation capability for MVP. Host lifecycle code alone may perform the bounded current-issue operations required to read state/history, append lifecycle comments, and add/remove SYMPHONY lifecycle labels. Do not expose a generic host-authenticated tracker write surface to role agents.
+
+Human escalation is exceptional. Normal revision, adversarial findings, failed tests, difficult implementation, budget exhaustion, and retryable infrastructure failures are not reasons to hand routine routing back to the human.
 
 ## Preserve upstream unless required otherwise
 
@@ -59,7 +99,7 @@ Treat these as valuable stock Symphony surfaces:
 - worker supervision;
 - retry/backoff and reconciliation;
 - Codex App Server transport;
-- terminal cleanup;
+- terminal-issue cleanup;
 - observability foundations.
 
 Do not widen a change merely to make the architecture feel cleaner.
@@ -74,7 +114,7 @@ If not, leave it alone unless required for safety.
 
 SYMPHONY is one reusable orchestration implementation that can be used across arbitrary target repositories without source-code modification.
 
-Each running Symphony instance is scoped to one target project through that project's project-local `instance_config.yml`. This file binds/configures one project-scoped runtime instance only; it does not define the shared lifecycle, a PM profile, a role prompt, or lifecycle authority.
+Each running Symphony instance is scoped to one target project through that project's project-local `.symphony/instance_config.yml`. This file binds/configures one project-scoped runtime instance only; it does not define the shared lifecycle, a PM profile, a role prompt, or lifecycle authority.
 
 The shared multi-role lifecycle belongs to SYMPHONY and is structurally enforced by host code, not expressed as project-specific prompt prose. Dispatched agents read the target repository's applicable `AGENTS.md`, harness, and source context; the orchestrator does not need to reason about that project's domain.
 
@@ -84,18 +124,19 @@ MVP does **not** require one orchestrator to multiplex multiple target projects 
 
 Project onboarding should be configuration/bootstrap work, not a new source-code integration.
 
-## GitHub lifecycle direction
+## Recovery boundary
 
-For MVP, GitHub Issues are the preferred durable task/lifecycle substrate unless later analysis proves them insufficient.
+Lifecycle recovery is reconstructed from GitHub labels plus the append-only lifecycle event log. Host-local PM metadata is used only for PM thread continuity.
 
-Current direction:
+Important invariants:
 
-- `symphony:auto` opts an issue into automation;
-- exactly one `symphony:role:*` label represents the active lifecycle role;
-- host code validates and performs lifecycle transitions;
-- durable handoff representation, round counters, PM-thread persistence, restart semantics, and terminal/non-converged representation are still explicit design questions.
+- a crashed specialist reruns fresh in the same role without consuming lifecycle budget;
+- a crashed PM resumes the same PM thread without consuming lifecycle budget;
+- a durable transition comment with a stale old role label is completed idempotently by the host;
+- a new-role label without its matching durable handoff is invalid/corrupt state and must block visibly rather than invent missing history;
+- an unavailable required PM thread must block visibly and must never be silently replaced.
 
-Do not invent a hidden second lifecycle database while those questions are unresolved.
+Persist durable handoff/history **before** mutating the role label.
 
 ## WSL and adapter boundary
 
@@ -107,7 +148,7 @@ The adapter is **developer/tooling infrastructure only**. It is not lifecycle au
 
 Do not respond to the known direct-WSL bug by reinstalling/rebuilding WSL or redesigning the product.
 
-There must be one authoritative SYMPHONY source checkout. WSL may contain an installed/built Symphony runtime, logs, caches, and project/issue workspaces, but not a second independently authoritative SYMPHONY source repository.
+There must be one authoritative SYMPHONY source checkout. WSL may contain an installed/built Symphony runtime, logs, caches, host-owned state, and project/issue workspaces, but not a second independently authoritative SYMPHONY source repository.
 
 Old SYMPHONY-specific WSL state may be removed only after producing an explicit deletion manifest. Preserve unrelated WSL state, Codex auth/install, Git config, and unrelated projects/tools.
 
@@ -122,7 +163,7 @@ For documentation/reconciliation work, classify inherited material as:
 
 Do not implement while performing a donor-doc review unless the task explicitly authorizes implementation.
 
-Pay special attention to hidden architectural assumptions in apparently operational documentation: scheduling identity, workspace identity, tracker scope, instance_config scope, thread lifetime, retry ownership, project selection, and mutation authority.
+Pay special attention to hidden architectural assumptions in apparently operational documentation: scheduling identity, workspace identity, tracker scope, instance-config scope, thread lifetime, retry ownership, project selection, and mutation authority.
 
 ## Change discipline
 
@@ -130,6 +171,7 @@ Pay special attention to hidden architectural assumptions in apparently operatio
 - Do not import scheduling/control-plane code from parked custom Pilot/Runtime branches.
 - Do not preserve legacy behavior for compatibility's sake; this product has not launched.
 - Do not introduce SQLite, a scheduler-of-schedulers, centralized multi-project control plane, publication automation, or internal multi-project multiplexing without explicit authority. Independent project-scoped runtime instances are allowed.
+- Do not add a model-owned lifecycle transition mechanism or generic tracker-write escape hatch.
 - Do not perform unrelated refactors.
 - Do not use destructive Git operations (`reset`, `clean`, force push, ref rewrites, destructive checkout) without explicit human approval and stated consequences.
 - Do not ask the human to manually inspect giant diffs or ferry routine prompts between agents.
@@ -140,8 +182,9 @@ Pay special attention to hidden architectural assumptions in apparently operatio
 When implementation is authorized:
 
 1. prove the smallest changed seam with focused tests;
-2. verify adjacent retry/reconciliation/restart behavior when stateful code changes;
-3. run the relevant broader project gate before handoff;
-4. report the exact changed files/functions, evidence, and any remaining semantic uncertainty.
+2. prove role/write/tracker authority with executable boundaries, not prompt assertions;
+3. verify adjacent retry/reconciliation/restart behavior when stateful code changes;
+4. run the relevant broader project gate before handoff;
+5. report the exact changed files/functions, evidence, and any remaining semantic uncertainty.
 
 A technically passing implementation that violates the lifecycle invariant is not acceptable.
