@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, PromptBuilder, RoleProfiles, Workspace}
+  alias SymphonyElixir.{Config, Lifecycle, PromptBuilder, RoleProfiles, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
@@ -99,13 +99,23 @@ defmodule SymphonyElixir.AgentRunner do
                  issue,
                  on_message: codex_message_handler(codex_update_recipient, issue)
                ) do
-          Logger.info(
-            "Completed #{RoleProfiles.role_name(role)} role execution for #{issue_context(issue)} " <>
-              "session_id=#{turn_session[:session_id]} workspace=#{workspace}"
-          )
+          with {:ok, result} <-
+                 Lifecycle.decode_and_validate_result(turn_session[:assistant_text], role) do
+            Logger.info(
+              "Completed #{RoleProfiles.role_name(role)} role execution for #{issue_context(issue)} " <>
+                "session_id=#{turn_session[:session_id]} workspace=#{workspace}"
+            )
 
-          send_role_execution_completed(codex_update_recipient, issue, role, turn_session)
-          :ok
+            send_role_execution_completed(codex_update_recipient, issue, role, turn_session, result)
+            :ok
+          else
+            {:error, reason} ->
+              Logger.warning(
+                "Invalid #{RoleProfiles.role_name(role)} role result for #{issue_context(issue)}: #{inspect(reason)}"
+              )
+
+              {:error, {:invalid_role_result, reason}}
+          end
         end
       after
         AppServer.stop_session(session)
@@ -117,7 +127,8 @@ defmodule SymphonyElixir.AgentRunner do
          recipient,
          %Issue{id: issue_id},
          role,
-         %{result: result, session_id: session_id, thread_id: thread_id, turn_id: turn_id}
+         %{session_id: session_id, thread_id: thread_id, turn_id: turn_id},
+         result
        )
        when is_pid(recipient) and is_binary(issue_id) do
     send(
@@ -133,7 +144,7 @@ defmodule SymphonyElixir.AgentRunner do
     )
   end
 
-  defp send_role_execution_completed(_recipient, _issue, _role, _turn_session), do: :ok
+  defp send_role_execution_completed(_recipient, _issue, _role, _turn_session, _result), do: :ok
 
   defp selected_worker_host(nil, []), do: nil
 

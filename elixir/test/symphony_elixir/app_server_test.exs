@@ -1,6 +1,22 @@
 defmodule SymphonyElixir.AppServerTest do
   use SymphonyElixir.TestSupport
 
+  test "app server captures the final non-empty completed agent message" do
+    assert {:ok, result} = run_capture_fixture!(["first answer", " ", "final answer"])
+    assert result.assistant_text == "final answer"
+    assert result.thread_id == "thread-capture"
+    assert result.turn_id == "turn-capture"
+    refute Map.has_key?(result, :result)
+  end
+
+  test "app server fails a completed turn without an agent message" do
+    assert {:error, :turn_completed_without_agent_message} = run_capture_fixture!([])
+  end
+
+  test "app server captures one completed agent message" do
+    assert {:ok, %{assistant_text: "role result"}} = run_capture_fixture!(["role result"])
+  end
+
   test "app server rejects the workspace root and paths outside workspace root" do
     test_root =
       Path.join(
@@ -105,6 +121,7 @@ defmodule SymphonyElixir.AppServerTest do
             sleep 0.15
             printf '%s\n' '{"method":"item/updated","params":{"item":{"id":"two"}}}'
             sleep 0.15
+            printf '%s\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -145,6 +162,7 @@ defmodule SymphonyElixir.AppServerTest do
           4)
             printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-silent"}}}'
             sleep 0.4
+            printf '%s\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -210,6 +228,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-1001"}}}'
             ;;
           4)
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -526,6 +545,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{\"id\":99,\"method\":\"item/commandExecution/requestApproval\",\"params\":{\"command\":\"gh pr view\",\"cwd\":\"/tmp\",\"reason\":\"need approval\"}}'
             ;;
           5)
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
             exit 0
             ;;
@@ -663,6 +683,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{\"id\":110,\"method\":\"item/tool/requestUserInput\",\"params\":{\"itemId\":\"call-717\",\"questions\":[{\"header\":\"Approve app tool call?\",\"id\":\"mcp_tool_call_approval_call-717\",\"isOther\":false,\"isSecret\":false,\"options\":[{\"description\":\"Run the tool and continue.\",\"label\":\"Approve Once\"},{\"description\":\"Run the tool and remember this choice for this session.\",\"label\":\"Approve this Session\"},{\"description\":\"Decline this tool call and continue.\",\"label\":\"Deny\"},{\"description\":\"Cancel this tool call\",\"label\":\"Cancel\"}],\"question\":\"The linear MCP server wants to run the tool \\\"Save issue\\\", which may modify or delete data. Allow this action?\"}],\"threadId\":\"thread-717\",\"turnId\":\"turn-717\"}}'
             ;;
           5)
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
             exit 0
             ;;
@@ -748,6 +769,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{"id":111,"method":"item/tool/requestUserInput","params":{"itemId":"call-718","questions":[{"header":"Provide context","id":"freeform-718","isOther":false,"isSecret":false,"options":null,"question":"What comment should I post back to the issue?"}],"threadId":"thread-718","turnId":"turn-718"}}'
             ;;
           5)
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -818,6 +840,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{\"id\":112,\"method\":\"item/tool/requestUserInput\",\"params\":{\"itemId\":\"call-719\",\"questions\":[{\"header\":\"Choose an action\",\"id\":\"options-719\",\"isOther\":false,\"isSecret\":false,\"options\":[{\"description\":\"Proceed with the requested action.\",\"label\":\"Allow\"},{\"description\":\"Do not proceed.\",\"label\":\"Deny\"}],\"question\":\"How should I proceed?\"}],\"threadId\":\"thread-719\",\"turnId\":\"turn-719\"}}'
             ;;
           5)
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
             exit 0
             ;;
@@ -902,6 +925,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{\"id\":101,\"method\":\"item/tool/call\",\"params\":{\"tool\":\"some_tool\",\"callId\":\"call-90\",\"threadId\":\"thread-90\",\"turnId\":\"turn-90\",\"arguments\":{}}}'
             ;;
           5)
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
             exit 0
             ;;
@@ -1003,6 +1027,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{\"id\":102,\"method\":\"item/tool/call\",\"params\":{\"name\":\"linear_graphql\",\"callId\":\"call-90a\",\"threadId\":\"thread-90a\",\"turnId\":\"turn-90a\",\"arguments\":{\"query\":\"query Viewer { viewer { id } }\",\"variables\":{\"includeTeams\":false}}}}'
             ;;
           5)
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
             exit 0
             ;;
@@ -1125,6 +1150,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{\"id\":103,\"method\":\"item/tool/call\",\"params\":{\"tool\":\"linear_graphql\",\"callId\":\"call-90b\",\"threadId\":\"thread-90b\",\"turnId\":\"turn-90b\",\"arguments\":{\"query\":\"query Viewer { viewer { id } }\"}}}'
             ;;
           5)
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
             exit 0
             ;;
@@ -1215,6 +1241,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-91"}}}'
             ;;
           4)
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -1279,6 +1306,7 @@ defmodule SymphonyElixir.AppServerTest do
             ;;
           4)
             printf '%s\\n' 'warning: this is stderr noise' >&2
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -1354,6 +1382,7 @@ defmodule SymphonyElixir.AppServerTest do
             ;;
           4)
             printf '%s\\n' '{"method":"turn/completed"'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -1458,6 +1487,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-secret"}}}'
             ;;
           4)
+            printf '%s\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -1541,6 +1571,7 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-remote"}}}'
             ;;
           4)
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             exit 0
             ;;
@@ -1624,6 +1655,75 @@ defmodule SymphonyElixir.AppServerTest do
                  false
                end
              end)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  defp run_capture_fixture!(messages) do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-capture-#{System.unique_integer([:positive])}"
+      )
+
+    workspace_root = Path.join(test_root, "workspaces")
+    workspace = Path.join(workspace_root, "MT-CAPTURE")
+    codex_binary = Path.join(test_root, "fake-codex")
+    File.mkdir_p!(workspace)
+
+    agent_message_lines =
+      Enum.map_join(messages, "\n", fn text ->
+        payload =
+          Jason.encode!(%{
+            "method" => "item/completed",
+            "params" => %{
+              "item" => %{"type" => "agentMessage", "text" => text}
+            }
+          })
+
+        "            printf '%s\\n' '#{payload}'"
+      end)
+
+    File.write!(codex_binary, """
+    #!/bin/sh
+    count=0
+    while IFS= read -r line; do
+      count=$((count + 1))
+      case "$count" in
+        1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+        2) ;;
+        3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-capture"}}}' ;;
+        4)
+          printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-capture"}}}'
+          #{agent_message_lines}
+          printf '%s\\n' '{"method":"turn/completed"}'
+          exit 0
+          ;;
+        *) exit 0 ;;
+      esac
+    done
+    """)
+
+    File.chmod!(codex_binary, 0o755)
+
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
+      workspace_root: workspace_root,
+      codex_command: "#{codex_binary} app-server"
+    )
+
+    issue = %Issue{
+      id: "issue-capture",
+      identifier: "MT-CAPTURE",
+      title: "Capture assistant output",
+      description: "Capture completed agent messages",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-CAPTURE",
+      labels: ["backend"]
+    }
+
+    try do
+      AppServer.run(workspace, "Capture assistant output", issue)
     after
       File.rm_rf(test_root)
     end

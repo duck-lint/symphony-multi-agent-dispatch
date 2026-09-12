@@ -34,6 +34,33 @@ defmodule SymphonyElixir.Lifecycle do
 
   def validate_result(_result), do: {:error, :role_result_not_a_map}
 
+  @spec decode_and_validate_result(String.t(), RoleProfiles.role()) ::
+          {:ok, map()} | {:error, term()}
+  def decode_and_validate_result(text, expected_role) when is_binary(text) do
+    case String.trim(text) do
+      "" ->
+        {:error, :missing_role_result_output}
+
+      trimmed ->
+        case Jason.decode(trimmed) do
+          {:ok, result} when is_map(result) ->
+            with {:ok, validated_result} <- validate_result(result),
+                 :ok <- validate_expected_role(validated_result, expected_role) do
+              {:ok, validated_result}
+            end
+
+          {:ok, _result} ->
+            {:error, :role_result_not_a_map}
+
+          {:error, reason} ->
+            {:error, {:role_result_json_decode_error, reason}}
+        end
+    end
+  end
+
+  def decode_and_validate_result(_text, _expected_role),
+    do: {:error, :invalid_role_result_output}
+
   @spec transition(RoleProfiles.role(), String.t() | atom(), map()) ::
           {:ok, destination()} | {:error, term()}
   def transition(role, outcome, context \\ %{}) when is_map(context) do
@@ -132,6 +159,18 @@ defmodule SymphonyElixir.Lifecycle do
   end
 
   defp validate_result_outcome(role, outcome), do: {:error, {:invalid_role_outcome, role, outcome}}
+
+  defp validate_expected_role(result, expected_role) do
+    with {:ok, canonical_expected_role} <- canonical_role(expected_role) do
+      expected_name = RoleProfiles.role_name(canonical_expected_role)
+
+      if result["role"] == expected_name do
+        :ok
+      else
+        {:error, {:role_result_role_mismatch, expected_name, result["role"]}}
+      end
+    end
+  end
 
   defp validate_summary(summary) when is_binary(summary) do
     cond do

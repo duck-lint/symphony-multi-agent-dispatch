@@ -1021,6 +1021,25 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    send(
+      pid,
+      {:role_execution_completed, issue_id,
+       %{
+         role: :planner,
+         result: %{
+           "schema" => "symphony.role-result/v1",
+           "role" => "PLANNER",
+           "outcome" => "plan_ready",
+           "summary" => "bounded plan",
+           "evidence" => [],
+           "findings" => []
+         },
+         session_id: "thread-park-turn",
+         thread_id: "thread-park",
+         turn_id: "turn-park"
+       }}
+    )
+
     send(pid, {:DOWN, ref, :process, self(), :normal})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -1029,6 +1048,7 @@ defmodule SymphonyElixir.CoreTest do
     refute Map.has_key?(state.retry_attempts, issue_id)
     assert %{error: "role execution completed; lifecycle transition is not committed"} =
              state.blocked[issue_id]
+    assert %{role: :planner, result: %{"role" => "PLANNER"}} = state.blocked[issue_id].role_execution
     assert MapSet.member?(state.claimed, issue_id)
   end
 
@@ -1392,6 +1412,7 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           4)
             printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-1\"}}}'
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"{\\\"schema\\\":\\\"symphony.role-result/v1\\\",\\\"role\\\":\\\"IMPLEMENTER\\\",\\\"outcome\\\":\\\"implementation_complete\\\",\\\"summary\\\":\\\"done\\\",\\\"evidence\\\":[],\\\"findings\\\":[]}\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
             exit 0
             ;;
@@ -1475,6 +1496,7 @@ defmodule SymphonyElixir.CoreTest do
               ;;
             3)
               printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-live\"}}}'
+              printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"{\\\"schema\\\":\\\"symphony.role-result/v1\\\",\\\"role\\\":\\\"IMPLEMENTER\\\",\\\"outcome\\\":\\\"implementation_complete\\\",\\\"summary\\\":\\\"done\\\",\\\"evidence\\\":[],\\\"findings\\\":[]}\"}}}'
               ;;
             4)
               printf '%s\\n' '{\"method\":\"turn/completed\"}'
@@ -1514,6 +1536,19 @@ defmodule SymphonyElixir.CoreTest do
                  issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
                )
 
+      assert_receive {:role_execution_completed, "issue-live-updates",
+                      %{
+                        role: :implementer,
+                        result: %{
+                          "schema" => "symphony.role-result/v1",
+                          "role" => "IMPLEMENTER",
+                          "outcome" => "implementation_complete"
+                        },
+                        session_id: "thread-live-turn-live",
+                        thread_id: "thread-live",
+                        turn_id: "turn-live"
+                      }}
+
       assert_receive {:codex_worker_update, "issue-live-updates",
                       %{
                         event: :session_started,
@@ -1523,6 +1558,71 @@ defmodule SymphonyElixir.CoreTest do
                      500
 
       assert session_id == "thread-live-turn-live"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner rejects an invalid role result without reporting completion" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-invalid-result-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      File.mkdir_p!(workspace_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-invalid"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-invalid"}}}'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"not valid JSON"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          *)
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-invalid-result",
+        identifier: "MT-INVALID",
+        title: "Reject invalid role result",
+        description: "Do not report an unvalidated result as a successful completion",
+        state: "In Progress",
+        labels: ["symphony:role:reviewer"]
+      }
+
+      assert_raise RuntimeError, ~r/invalid_role_result/, fn ->
+        AgentRunner.run(issue, self(), role: :reviewer)
+      end
+
+      refute_receive {:role_execution_completed, "issue-invalid-result", _completion}
     after
       File.rm_rf(test_root)
     end
@@ -1640,10 +1740,12 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           4)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-cont-1"}}}'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"schema\":\"symphony.role-result/v1\",\"role\":\"PLANNER\",\"outcome\":\"plan_ready\",\"summary\":\"done\",\"evidence\":[],\"findings\":[]}"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
           5)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-cont-2"}}}'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"schema\":\"symphony.role-result/v1\",\"role\":\"PLANNER\",\"outcome\":\"plan_ready\",\"summary\":\"done\",\"evidence\":[],\"findings\":[]}"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
         esac
@@ -1739,6 +1841,7 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           4)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-max-1"}}}'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"schema\":\"symphony.role-result/v1\",\"role\":\"REVIEWER\",\"outcome\":\"accept\",\"summary\":\"done\",\"evidence\":[],\"findings\":[]}"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
         esac
@@ -1821,6 +1924,7 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           3)
             printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-77\"}}}'
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             ;;
           4)
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
@@ -1965,6 +2069,7 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           3)
             printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-88\"}}}'
+            printf '%s\\n' '{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"assistant output\"}}}'
             ;;
           4)
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
@@ -2051,6 +2156,7 @@ defmodule SymphonyElixir.CoreTest do
             ;;
           3)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-99"}}}'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
             ;;
           4)
             printf '%s\\n' '{"method":"turn/completed"}'

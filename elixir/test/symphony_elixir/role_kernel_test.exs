@@ -198,6 +198,38 @@ defmodule SymphonyElixir.RoleKernelTest do
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", :none))
   end
 
+  test "role result decoding accepts exactly one expected-role JSON object" do
+    encoded = Jason.encode!(valid_result("REVIEWER", "accept"))
+
+    assert {:ok, result} = Lifecycle.decode_and_validate_result("  #{encoded}\n", :reviewer)
+    assert result["role"] == "REVIEWER"
+  end
+
+  test "role result decoding rejects missing, fenced, prose, malformed, and non-object output" do
+    encoded = Jason.encode!(valid_result("REVIEWER", "accept"))
+
+    assert {:error, :missing_role_result_output} = Lifecycle.decode_and_validate_result("  ", :reviewer)
+
+    assert {:error, {:role_result_json_decode_error, _}} =
+             Lifecycle.decode_and_validate_result("```json\n#{encoded}\n```", :reviewer)
+
+    assert {:error, {:role_result_json_decode_error, _}} =
+             Lifecycle.decode_and_validate_result("Here is the result: #{encoded}", :reviewer)
+
+    assert {:error, {:role_result_json_decode_error, _}} =
+             Lifecycle.decode_and_validate_result("{not json}", :reviewer)
+
+    assert {:error, :role_result_not_a_map} = Lifecycle.decode_and_validate_result("[]", :reviewer)
+  end
+
+  test "role result decoding enforces the host-selected role" do
+    assert {:error, {:role_result_role_mismatch, "REVIEWER", "IMPLEMENTER"}} =
+             Lifecycle.decode_and_validate_result(
+               Jason.encode!(valid_result("IMPLEMENTER", "implementation_complete")),
+               :reviewer
+             )
+  end
+
   test "finding severity, human question, and transition result validation are bounded" do
     base = valid_result("REVIEWER", "accept")
 
