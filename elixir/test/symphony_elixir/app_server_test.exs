@@ -17,6 +17,22 @@ defmodule SymphonyElixir.AppServerTest do
     assert {:ok, %{assistant_text: "role result"}} = run_capture_fixture!(["role result"])
   end
 
+  test "app server starts a fresh thread when no thread id is requested" do
+    assert {:ok, result} = run_thread_selection_fixture!(:fresh)
+    assert result.thread_id == "thread-fresh"
+  end
+
+  test "app server reuses a requested thread without starting a replacement" do
+    assert {:ok, result} = run_thread_selection_fixture!(:reuse)
+    assert result.thread_id == "thread-existing"
+    assert result.assistant_text == "assistant output"
+  end
+
+  test "app server surfaces a rejected requested thread without falling back" do
+    assert {:error, {:turn_start_failed, {:response_error, _}}} =
+             run_thread_selection_fixture!(:reuse_failure)
+  end
+
   test "app server rejects the workspace root and paths outside workspace root" do
     test_root =
       Path.join(
@@ -1724,6 +1740,112 @@ defmodule SymphonyElixir.AppServerTest do
 
     try do
       AppServer.run(workspace, "Capture assistant output", issue)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  defp run_thread_selection_fixture!(mode) when mode in [:fresh, :reuse, :reuse_failure] do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-thread-selection-#{System.unique_integer([:positive])}"
+      )
+
+    workspace_root = Path.join(test_root, "workspaces")
+    workspace = Path.join(workspace_root, "MT-THREAD")
+    codex_binary = Path.join(test_root, "fake-codex")
+    trace_path = Path.join(test_root, "requests.log") |> String.replace("\\", "/")
+    File.mkdir_p!(workspace)
+
+    thread_start_case =
+      case mode do
+        :fresh ->
+          """
+          3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-fresh"}}}' ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-fresh"}}}'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          """
+
+        :reuse ->
+          """
+          3)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-existing"}}}'
+            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          """
+
+        :reuse_failure ->
+          """
+          3)
+            printf '%s\\n' '{"id":3,"error":{"message":"thread not found"}}'
+            exit 0
+            ;;
+          """
+      end
+
+    File.write!(codex_binary, """
+    #!/bin/sh
+    count=0
+    while IFS= read -r line; do
+      count=$((count + 1))
+      printf '%s\\n' "$line" >> "#{trace_path}"
+      case "$count" in
+        1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+        2) ;;
+        #{thread_start_case}
+        *) exit 0 ;;
+      esac
+    done
+    """)
+
+    File.chmod!(codex_binary, 0o755)
+
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
+      workspace_root: workspace_root,
+      codex_command: "#{codex_binary} app-server"
+    )
+
+    issue = %Issue{
+      id: "issue-thread-selection",
+      identifier: "MT-THREAD",
+      title: "Select Codex thread",
+      description: "Validate fresh and reused Codex thread startup",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-THREAD",
+      labels: ["backend"]
+    }
+
+    opts =
+      case mode do
+        :fresh -> []
+        mode when mode in [:reuse, :reuse_failure] -> [thread_id: "thread-existing"]
+      end
+
+    try do
+      result = AppServer.run(workspace, "Select Codex thread", issue, opts)
+      requests = File.read!(trace_path)
+
+      case mode do
+        :fresh ->
+          assert requests =~ "\"method\":\"thread/start\""
+
+        :reuse ->
+          refute requests =~ "\"method\":\"thread/start\""
+          assert requests =~ "\"threadId\":\"thread-existing\""
+
+        :reuse_failure ->
+          refute requests =~ "\"method\":\"thread/start\""
+          assert requests =~ "\"threadId\":\"thread-existing\""
+      end
+
+      result
     after
       File.rm_rf(test_root)
     end

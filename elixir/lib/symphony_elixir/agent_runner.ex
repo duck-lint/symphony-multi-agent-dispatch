@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Lifecycle, PromptBuilder, RoleProfiles, Workspace}
+  alias SymphonyElixir.{Config, Lifecycle, PMThreadState, PromptBuilder, RoleProfiles, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
@@ -25,6 +25,11 @@ defmodule SymphonyElixir.AgentRunner do
     case run_on_worker_host(issue, codex_update_recipient, opts, worker_host, role, role_profile) do
       :ok ->
         :ok
+
+      {:error, {:pm_thread_continuity, reason}} ->
+        send_pm_continuity_failure(codex_update_recipient, issue, reason)
+        Logger.error("PM thread continuity failed for #{issue_context(issue)}: #{inspect(reason)}")
+        raise RuntimeError, "PM thread continuity failed for #{issue_context(issue)}: #{inspect(reason)}"
 
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
@@ -83,38 +88,32 @@ defmodule SymphonyElixir.AgentRunner do
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
 
   defp run_role_turn(workspace, issue, codex_update_recipient, opts, worker_host, role, role_profile) do
-    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
+    with {:ok, thread_selection} <- resolve_thread_selection(issue, role, opts),
+         {:ok, session} <- start_role_session(workspace, worker_host, thread_selection) do
       try do
-        prompt_context = %{
-          role_profile: role_profile,
-          handoff: Keyword.get(opts, :handoff)
-        }
-
-        prompt = PromptBuilder.build_prompt(issue, role, prompt_context)
-
-        with {:ok, turn_session} <-
-               AppServer.run_turn(
+        with :ok <- persist_new_pm_thread(issue, thread_selection, session) do
+          case run_role_turn_with_session(
                  session,
-                 prompt,
+                 workspace,
                  issue,
-                 on_message: codex_message_handler(codex_update_recipient, issue)
+                 codex_update_recipient,
+                 opts,
+                 role,
+                 role_profile
                ) do
-          with {:ok, result} <-
-                 Lifecycle.decode_and_validate_result(turn_session[:assistant_text], role) do
-            Logger.info(
-              "Completed #{RoleProfiles.role_name(role)} role execution for #{issue_context(issue)} " <>
-                "session_id=#{turn_session[:session_id]} workspace=#{workspace}"
-            )
-
-            send_role_execution_completed(codex_update_recipient, issue, role, turn_session, result)
-            :ok
-          else
-            {:error, reason} ->
-              Logger.warning(
-                "Invalid #{RoleProfiles.role_name(role)} role result for #{issue_context(issue)}: #{inspect(reason)}"
+            {:ok, turn_session} ->
+              send_role_execution_completed(
+                codex_update_recipient,
+                issue,
+                role,
+                turn_session,
+                turn_session.result
               )
 
-              {:error, {:invalid_role_result, reason}}
+              :ok
+
+            {:error, reason} ->
+              normalize_role_turn_error(thread_selection, reason)
           end
         end
       after
@@ -122,6 +121,128 @@ defmodule SymphonyElixir.AgentRunner do
       end
     end
   end
+
+  defp run_role_turn_with_session(
+         session,
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         role,
+         role_profile
+       ) do
+    prompt_context = %{
+      role_profile: role_profile,
+      handoff: Keyword.get(opts, :handoff)
+    }
+
+    prompt = PromptBuilder.build_prompt(issue, role, prompt_context)
+
+    case AppServer.run_turn(
+           session,
+           prompt,
+           issue,
+           on_message: codex_message_handler(codex_update_recipient, issue)
+         ) do
+      {:ok, turn_session} ->
+        case Lifecycle.decode_and_validate_result(turn_session[:assistant_text], role) do
+          {:ok, result} ->
+            Logger.info(
+              "Completed #{RoleProfiles.role_name(role)} role execution for #{issue_context(issue)} " <>
+                "session_id=#{turn_session[:session_id]} workspace=#{workspace}"
+            )
+
+            {:ok, Map.put(turn_session, :result, result)}
+
+          {:error, reason} ->
+            Logger.warning(
+              "Invalid #{RoleProfiles.role_name(role)} role result for #{issue_context(issue)}: #{inspect(reason)}"
+            )
+
+            {:error, {:invalid_role_result, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp resolve_thread_selection(%Issue{id: issue_id}, :pm, opts) do
+    lifecycle_id = Keyword.get(opts, :lifecycle_id)
+    phase = Keyword.get(opts, :pm_phase)
+
+    if is_binary(lifecycle_id) and phase in [:initial, :returning] do
+      case PMThreadState.resolve(issue_id, lifecycle_id, phase) do
+        {:resume, thread_id} ->
+          {:ok, %{kind: :pm, thread_id: thread_id, persist?: false, lifecycle_id: lifecycle_id}}
+
+        {:new, _reason} ->
+          {:ok, %{kind: :pm, thread_id: nil, persist?: true, lifecycle_id: lifecycle_id}}
+
+        {:error, reason} ->
+          {:error, {:pm_thread_continuity, reason}}
+      end
+    else
+      {:error, {:pm_thread_continuity, :invalid_lifecycle_binding}}
+    end
+  end
+
+  defp resolve_thread_selection(%Issue{}, _role, _opts), do: {:ok, %{kind: :specialist}}
+
+  defp start_role_session(workspace, worker_host, %{kind: :specialist}) do
+    AppServer.start_session(workspace, worker_host: worker_host)
+  end
+
+  defp start_role_session(workspace, worker_host, %{kind: :pm, thread_id: nil}) do
+    AppServer.start_session(workspace, worker_host: worker_host)
+  end
+
+  defp start_role_session(workspace, worker_host, %{kind: :pm, thread_id: thread_id}) do
+    case AppServer.start_session(workspace, worker_host: worker_host, thread_id: thread_id) do
+      {:ok, session} ->
+        {:ok, session}
+
+      {:error, reason} ->
+        {:error, {:pm_thread_continuity, {:required_thread_unavailable, reason}}}
+    end
+  end
+
+  defp persist_new_pm_thread(
+         %Issue{id: issue_id},
+         %{kind: :pm, persist?: true, lifecycle_id: lifecycle_id},
+         session
+       ) do
+    case PMThreadState.put(issue_id, lifecycle_id, session.thread_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error, {:pm_thread_continuity, {:thread_state_persist_failed, reason}}}
+    end
+  end
+
+  defp persist_new_pm_thread(_issue, _selection, _session), do: :ok
+
+  defp normalize_role_turn_error(
+         %{kind: :pm, thread_id: thread_id},
+         {:turn_start_failed, reason}
+       )
+       when is_binary(thread_id) do
+    {:error, {:pm_thread_continuity, {:required_thread_unavailable, reason}}}
+  end
+
+  defp normalize_role_turn_error(_selection, reason), do: {:error, reason}
+
+  defp send_pm_continuity_failure(recipient, %Issue{id: issue_id}, reason)
+       when is_pid(recipient) and is_binary(issue_id) do
+    send(
+      recipient,
+      {:role_execution_failed, issue_id,
+       %{kind: :pm_continuity, role: :pm, reason: reason}}
+    )
+  end
+
+  defp send_pm_continuity_failure(_recipient, _issue, _reason), do: :ok
 
   defp send_role_execution_completed(
          recipient,

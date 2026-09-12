@@ -38,6 +38,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
+    requested_thread_id = Keyword.get(opts, :thread_id)
     dynamic_tool_binding = DynamicTool.bind()
 
     with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
@@ -46,7 +47,13 @@ defmodule SymphonyElixir.Codex.AppServer do
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
            {:ok, thread_id} <-
-             do_start_session(port, expanded_workspace, session_policies, dynamic_tool_binding) do
+             do_start_session(
+               port,
+               expanded_workspace,
+               session_policies,
+               dynamic_tool_binding,
+               requested_thread_id
+             ) do
         {:ok,
          %{
            port: port,
@@ -138,7 +145,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       {:error, reason} ->
         Logger.error("Codex session failed for #{issue_context(issue)}: #{inspect(reason)}")
         emit_message(on_message, :startup_failed, %{reason: reason}, metadata)
-        {:error, reason}
+        {:error, {:turn_start_failed, reason}}
     end
   end
 
@@ -304,11 +311,63 @@ defmodule SymphonyElixir.Codex.AppServer do
     Config.codex_runtime_settings(workspace, remote: true)
   end
 
-  defp do_start_session(port, workspace, session_policies, dynamic_tool_binding) do
+  defp do_start_session(
+         port,
+         workspace,
+         session_policies,
+         dynamic_tool_binding,
+         requested_thread_id
+       ) do
     case send_initialize(port) do
-      :ok -> start_thread(port, workspace, session_policies, dynamic_tool_binding)
+      :ok ->
+        start_or_reuse_thread(
+          port,
+          workspace,
+          session_policies,
+          dynamic_tool_binding,
+          requested_thread_id
+        )
+
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp start_or_reuse_thread(
+         port,
+         workspace,
+         session_policies,
+         dynamic_tool_binding,
+         nil
+       ),
+       do: start_thread(port, workspace, session_policies, dynamic_tool_binding)
+
+  defp start_or_reuse_thread(
+         _port,
+         _workspace,
+         _session_policies,
+         _dynamic_tool_binding,
+         thread_id
+       )
+       when is_binary(thread_id) do
+    if valid_requested_thread_id?(thread_id) do
+      {:ok, String.trim(thread_id)}
+    else
+      {:error, :invalid_thread_id}
+    end
+  end
+
+  defp start_or_reuse_thread(
+         _port,
+         _workspace,
+         _session_policies,
+         _dynamic_tool_binding,
+         _thread_id
+       ),
+       do: {:error, :invalid_thread_id}
+
+  defp valid_requested_thread_id?(thread_id) do
+    String.trim(thread_id) != "" and
+      not String.contains?(thread_id, ["\n", "\r", <<0>>])
   end
 
   defp start_thread(

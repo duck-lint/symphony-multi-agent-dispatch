@@ -66,6 +66,30 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  @spec block_pm_continuity(Issue.t(), term(), keyword()) :: {:ok, Issue.t()} | {:error, term()}
+  def block_pm_continuity(%Issue{id: issue_id}, reason, _opts \\ [])
+      when is_binary(issue_id) do
+    if github_tracker?() do
+      with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
+           :ok <- validate_active_issue(current_issue),
+           :ok <- validate_opt_in(current_issue),
+           {:ok, :pm} <- RoleRouter.role_for_issue(current_issue),
+           :ok <- append_pm_continuity_diagnostic(issue_id, reason),
+           :ok <- remove_auto_label(current_issue),
+           :ok <- remove_state_labels(current_issue),
+           {:ok, _} <- github_client().add_issue_label(issue_id, @blocked_label),
+           {:ok, projected_issue} <- github_client().fetch_issue(issue_id),
+           :ok <- verify_pm_continuity_block(projected_issue) do
+        {:ok, projected_issue}
+      else
+        {:ok, role} -> {:error, {:pm_continuity_requires_pm_role, role}}
+        {:error, _reason} = error -> error
+      end
+    else
+      {:error, :lifecycle_requires_github_tracker}
+    end
+  end
+
   defp commit_with_history(current_issue, history, expected_role, result) do
     with {:ok, validated_result} <- validate_expected_result(result, expected_role),
          idempotent <- idempotent_result(history, current_issue, validated_result, expected_role) do
@@ -235,7 +259,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
-  defp handle_invalid_state(issue, _history, reason) do
+  defp handle_invalid_state(issue, history, reason) do
     if has_label?(issue.labels, @auto_label) do
       block_invalid_state(issue, history, reason)
     else
@@ -259,6 +283,16 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     else
       {:error, projection_reason} ->
         {:error, {:failed_to_block_lifecycle, reason, projection_reason}}
+    end
+  end
+
+  defp append_pm_continuity_diagnostic(issue_id, reason) do
+    diagnostic =
+      "SYMPHONY PM thread continuity blocked: #{inspect(reason) |> String.slice(0, 1_000)}"
+
+    case github_client().append_issue_comment(issue_id, diagnostic) do
+      {:ok, _comment} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
@@ -562,6 +596,16 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       :ok
     else
       {:error, :lifecycle_role_projection_verification_failed}
+    end
+  end
+
+  defp verify_pm_continuity_block(issue) do
+    if not has_label?(issue.labels, @auto_label) and
+         RoleRouter.role_for_issue(issue) == {:ok, :pm} and
+         has_label?(issue.labels, @blocked_label) do
+      :ok
+    else
+      {:error, :pm_continuity_block_projection_verification_failed}
     end
   end
 

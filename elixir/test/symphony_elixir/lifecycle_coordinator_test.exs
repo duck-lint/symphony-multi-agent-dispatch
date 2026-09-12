@@ -113,6 +113,33 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     refute "symphony:auto" in state.issue.labels
   end
 
+  test "blocks PM continuity without consuming lifecycle state" do
+    issue = github_issue()
+
+    assert {:ok, projected} =
+             LifecycleCoordinator.block_pm_continuity(issue, :required_thread_unavailable)
+
+    assert projected.state == "open"
+    assert projected.labels == ["symphony:role:pm", "human-label", "symphony:state:blocked"]
+
+    state =
+      Agent.get(
+        Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state),
+        & &1
+      )
+
+    assert Enum.any?(state.comments, &String.contains?(&1["body"], "PM thread continuity blocked"))
+
+    append_index =
+      Enum.find_index(state.trace, fn
+        {:append, body} -> String.contains?(body, "PM thread continuity blocked")
+        _ -> false
+      end)
+
+    remove_auto_index = Enum.find_index(state.trace, &(&1 == {:remove, "symphony:auto"}))
+    assert append_index < remove_auto_index
+  end
+
   defp github_issue do
     %Issue{
       id: "42",

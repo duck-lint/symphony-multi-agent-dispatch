@@ -217,6 +217,23 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info({:role_execution_completed, _issue_id, _completion}, state), do: {:noreply, state}
 
+  def handle_info(
+        {:role_execution_failed, issue_id, %{kind: :pm_continuity} = failure},
+        %{running: running} = state
+      )
+      when is_binary(issue_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        notify_dashboard()
+        {:noreply, %{state | running: Map.put(running, issue_id, Map.put(running_entry, :role_execution_failure, failure))}}
+    end
+  end
+
+  def handle_info({:role_execution_failed, _issue_id, _failure}, state), do: {:noreply, state}
+
   def handle_info({:retry_issue, issue_id, retry_token}, state) do
     result =
       case pop_retry_attempt_state(state, issue_id, retry_token) do
@@ -236,17 +253,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_agent_down(:normal, state, issue_id, running_entry, session_id) do
-    case Map.get(running_entry, :role_execution) do
-      %{role: role, result: result} when is_map(result) ->
-        commit_completed_role(state, issue_id, running_entry, role, result)
-
-      _ ->
-        if input_required_blocker?(running_entry) do
-          block_input_required_agent_down(state, issue_id, running_entry, session_id, :normal)
-        else
-          retry_agent_down(state, issue_id, running_entry, session_id, :normal)
-        end
-    end
+    handle_agent_down_after_failure_check(:normal, state, issue_id, running_entry, session_id)
   end
 
   defp commit_completed_role(state, issue_id, running_entry, role, result) do
@@ -275,10 +282,44 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_agent_down(reason, state, issue_id, running_entry, session_id) do
-    if input_required_blocker?(running_entry) do
-      block_input_required_agent_down(state, issue_id, running_entry, session_id, reason)
-    else
-      retry_agent_down(state, issue_id, running_entry, session_id, reason)
+    handle_agent_down_after_failure_check(reason, state, issue_id, running_entry, session_id)
+  end
+
+  defp handle_agent_down_after_failure_check(reason, state, issue_id, running_entry, session_id) do
+    case Map.get(running_entry, :role_execution_failure) do
+      %{kind: :pm_continuity, reason: continuity_reason} ->
+        block_pm_continuity(state, issue_id, running_entry, continuity_reason)
+
+      _ ->
+        case Map.get(running_entry, :role_execution) do
+          %{role: role, result: result} when is_map(result) ->
+            commit_completed_role(state, issue_id, running_entry, role, result)
+
+          _ ->
+            if input_required_blocker?(running_entry) do
+              block_input_required_agent_down(state, issue_id, running_entry, session_id, reason)
+            else
+              retry_agent_down(state, issue_id, running_entry, session_id, reason)
+            end
+        end
+    end
+  end
+
+  defp block_pm_continuity(state, issue_id, running_entry, reason) do
+    diagnostic = "PM thread continuity blocked: #{inspect(reason)}"
+    Logger.warning("Agent task blocked for issue_id=#{issue_id}: #{diagnostic}")
+
+    case LifecycleCoordinator.block_pm_continuity(running_entry.issue, reason) do
+      {:ok, _issue} ->
+        block_issue_from_entry(state, issue_id, running_entry, diagnostic)
+
+      {:error, projection_reason} ->
+        block_issue_from_entry(
+          state,
+          issue_id,
+          running_entry,
+          "#{diagnostic}; unable to project technical block: #{inspect(projection_reason)}"
+        )
     end
   end
 
@@ -1103,7 +1144,9 @@ defmodule SymphonyElixir.Orchestrator do
              worker_host: worker_host,
              role: role,
              role_profile: role_profile,
-             handoff: handoff
+             handoff: handoff,
+             lifecycle_id: Map.get(handoff, :lifecycle_id),
+             pm_phase: Map.get(handoff, :pm_phase)
            )
          end) do
       {:ok, pid} ->
