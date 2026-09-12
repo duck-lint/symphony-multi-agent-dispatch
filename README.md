@@ -30,3 +30,21 @@ under `/home/duck-lint`, maps the requested cwd by repository-relative path,
 uses Ubuntu-24.04 as `duck-lint`, and launches the declared `mise` toolchain
 with a sterile environment. It is validation tooling only; it does not own
 lifecycle state or create a second authoritative source checkout.
+
+## Burrito packaging on Ubuntu/WSL
+
+Linux Burrito packaging requires the Ubuntu system package `xz-utils` and the
+project-declared mise toolchain:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y xz-utils
+mise install
+```
+
+The project declares Zig `0.15.2` in `elixir/mise.toml`. A Linux x86_64
+packaging build is run from `elixir` with:
+
+```bash
+BURRITO_TARGET=linux_x86_64 MIX_ENV=prod mix release --overwrite
+```
