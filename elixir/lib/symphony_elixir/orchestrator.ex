@@ -7,7 +7,16 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, RoleProfiles, RoleRouter, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{
+    AgentRunner,
+    Config,
+    LifecycleCoordinator,
+    RoleProfiles,
+    RoleRouter,
+    StatusDashboard,
+    Tracker,
+    Workspace
+  }
   alias SymphonyElixir.Tracker.Issue
 
   @failure_retry_base_ms 10_000
@@ -227,20 +236,41 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_agent_down(:normal, state, issue_id, running_entry, session_id) do
-    if input_required_blocker?(running_entry) do
-      block_input_required_agent_down(state, issue_id, running_entry, session_id, :normal)
-    else
-      Logger.info(
-        "Role execution completed for issue_id=#{issue_id} session_id=#{session_id}; " <>
-          "leaving lifecycle transition uncommitted"
-      )
+    case Map.get(running_entry, :role_execution) do
+      %{role: role, result: result} when is_map(result) ->
+        commit_completed_role(state, issue_id, running_entry, role, result)
 
-      block_issue_from_entry(
-        state,
-        issue_id,
-        running_entry,
-        "role execution completed; lifecycle transition is not committed"
-      )
+      _ ->
+        if input_required_blocker?(running_entry) do
+          block_input_required_agent_down(state, issue_id, running_entry, session_id, :normal)
+        else
+          retry_agent_down(state, issue_id, running_entry, session_id, :normal)
+        end
+    end
+  end
+
+  defp commit_completed_role(state, issue_id, running_entry, role, result) do
+    case LifecycleCoordinator.commit_role_result(running_entry.issue, role, result) do
+      {:ok, transition} ->
+        Logger.info(
+          "Committed SYMPHONY lifecycle transition for issue_id=#{issue_id} " <>
+            "transition_id=#{transition.event["transition_id"]} idempotent=#{transition.idempotent?}"
+        )
+
+        release_issue_claim(state, issue_id)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Unable to commit SYMPHONY lifecycle transition for issue_id=#{issue_id}; " <>
+            "retaining validated role result for host retry: #{inspect(reason)}"
+        )
+
+        block_issue_from_entry(
+          state,
+          issue_id,
+          running_entry,
+          "lifecycle transition commit failed: #{inspect(reason)}"
+        )
     end
   end
 
@@ -492,7 +522,7 @@ defmodule SymphonyElixir.Orchestrator do
         release_issue_claim(state, issue.id)
 
       active_issue_state?(issue.state, active_states) ->
-        refresh_blocked_issue_state(state, issue)
+        retry_blocked_lifecycle_commit(state, issue)
 
       true ->
         Logger.info("Blocked issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; releasing block")
@@ -575,6 +605,34 @@ defmodule SymphonyElixir.Orchestrator do
 
       _ ->
         state
+    end
+  end
+
+  defp retry_blocked_lifecycle_commit(%State{} = state, %Issue{} = issue) do
+    case Map.get(state.blocked, issue.id) do
+      %{role: role, role_execution: %{result: result}} = blocked_entry when is_map(result) ->
+        updated_state = refresh_blocked_issue_state(state, issue)
+
+        case LifecycleCoordinator.commit_role_result(issue, role, result) do
+          {:ok, transition} ->
+            Logger.info(
+              "Committed retained SYMPHONY lifecycle transition for blocked issue_id=#{issue.id} " <>
+                "transition_id=#{transition.event["transition_id"]}"
+            )
+
+            release_issue_claim(updated_state, issue.id)
+
+          {:error, reason} ->
+            Logger.debug(
+              "Retained SYMPHONY lifecycle transition still cannot commit for " <>
+                "issue_id=#{issue.id}: #{inspect(reason)}"
+            )
+
+            %{updated_state | blocked: Map.put(updated_state.blocked, issue.id, Map.put(blocked_entry, :issue, issue))}
+        end
+
+      _ ->
+        refresh_blocked_issue_state(state, issue)
     end
   end
 
@@ -892,7 +950,7 @@ defmodule SymphonyElixir.Orchestrator do
        )
        when is_binary(id) and is_binary(identifier) and is_binary(title) and is_binary(state_name) do
     Enum.all?([id, identifier, title, state_name], &present_string?/1) and
-      issue_routable?(issue) and
+      (issue_routable?(issue) or github_lifecycle_recovery_candidate?(issue)) and
       active_issue_state?(state_name, active_states) and
       !terminal_issue_state?(state_name, terminal_states)
   end
@@ -900,7 +958,25 @@ defmodule SymphonyElixir.Orchestrator do
   defp candidate_issue?(_issue, _active_states, _terminal_states), do: false
 
   defp issue_routable?(%Issue{} = issue) do
-    Issue.routable?(issue, Config.settings!().tracker.required_labels)
+    Issue.routable?(issue, Config.settings!().tracker.required_labels) and
+      github_issue_opted_in?(issue)
+  end
+
+  defp github_issue_opted_in?(%Issue{} = issue) do
+    if Config.settings!().tracker.kind == "github" do
+      Enum.any?(issue.labels, fn label ->
+        is_binary(label) and String.downcase(String.trim(label)) == "symphony:auto"
+      end)
+    else
+      true
+    end
+  end
+
+  defp github_lifecycle_recovery_candidate?(%Issue{} = issue) do
+    Config.settings!().tracker.kind == "github" and
+      Enum.any?(issue.labels, fn label ->
+        is_binary(label) and String.starts_with?(String.downcase(String.trim(label)), "symphony:state:")
+      end)
   end
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
@@ -968,6 +1044,21 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
+    case LifecycleCoordinator.prepare_dispatch(issue) do
+      {:skip, reason} ->
+        Logger.info("Skipping dispatch for #{issue_context(issue)}: #{inspect(reason)}")
+        release_issue_claim(state, issue.id)
+
+      {:error, reason} ->
+        Logger.warning("Skipping dispatch for #{issue_context(issue)}; lifecycle preparation failed: #{inspect(reason)}")
+        release_issue_claim(state, issue.id)
+
+      {:ok, %{issue: prepared_issue, handoff: handoff}} ->
+        dispatch_prepared_issue(state, prepared_issue, handoff, attempt, preferred_worker_host)
+    end
+  end
+
+  defp dispatch_prepared_issue(%State{} = state, issue, handoff, attempt, preferred_worker_host) do
     case role_profile_for_dispatch(issue) do
       {:error, reason} ->
         Logger.warning(
@@ -996,13 +1087,14 @@ defmodule SymphonyElixir.Orchestrator do
               recipient,
               worker_host,
               role_profile.role,
-              role_profile
+              role_profile,
+              handoff
             )
         end
     end
   end
 
-  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, role, role_profile) do
+  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, role, role_profile, handoff) do
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
            AgentRunner.run(
              issue,
@@ -1010,7 +1102,8 @@ defmodule SymphonyElixir.Orchestrator do
              attempt: attempt,
              worker_host: worker_host,
              role: role,
-             role_profile: role_profile
+             role_profile: role_profile,
+             handoff: handoff
            )
          end) do
       {:ok, pid} ->

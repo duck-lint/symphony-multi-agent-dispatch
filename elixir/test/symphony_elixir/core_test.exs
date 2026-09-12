@@ -992,7 +992,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "normal worker exit parks until the lifecycle transition is committed" do
+  test "normal worker exit without a retained role result uses the stock retry path" do
     issue_id = "issue-resume"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :ContinuationOrchestrator)
@@ -1021,34 +1021,13 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
-    send(
-      pid,
-      {:role_execution_completed, issue_id,
-       %{
-         role: :planner,
-         result: %{
-           "schema" => "symphony.role-result/v1",
-           "role" => "PLANNER",
-           "outcome" => "plan_ready",
-           "summary" => "bounded plan",
-           "evidence" => [],
-           "findings" => []
-         },
-         session_id: "thread-park-turn",
-         thread_id: "thread-park",
-         turn_id: "turn-park"
-       }}
-    )
-
     send(pid, {:DOWN, ref, :process, self(), :normal})
     Process.sleep(50)
     state = :sys.get_state(pid)
 
     refute Map.has_key?(state.running, issue_id)
-    refute Map.has_key?(state.retry_attempts, issue_id)
-    assert %{error: "role execution completed; lifecycle transition is not committed"} =
-             state.blocked[issue_id]
-    assert %{role: :planner, result: %{"role" => "PLANNER"}} = state.blocked[issue_id].role_execution
+    assert %{attempt: 1} = state.retry_attempts[issue_id]
+    refute Map.has_key?(state.blocked, issue_id)
     assert MapSet.member?(state.claimed, issue_id)
   end
 

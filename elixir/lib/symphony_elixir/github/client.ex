@@ -40,6 +40,31 @@ defmodule SymphonyElixir.GitHub.Client do
     fetch_issues_by_ids(issue_ids, Config.settings!().tracker, &perform_request/5)
   end
 
+  @spec fetch_issue(String.t()) :: {:ok, Issue.t()} | {:error, term()}
+  def fetch_issue(issue_id) when is_binary(issue_id) do
+    fetch_issue(issue_id, Config.settings!().tracker, &perform_request/5)
+  end
+
+  @spec fetch_issue_comments(String.t()) :: {:ok, [map()]} | {:error, term()}
+  def fetch_issue_comments(issue_id) when is_binary(issue_id) do
+    fetch_issue_comments(issue_id, Config.settings!().tracker, &perform_request/5)
+  end
+
+  @spec append_issue_comment(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def append_issue_comment(issue_id, body) when is_binary(issue_id) and is_binary(body) do
+    append_issue_comment(issue_id, body, Config.settings!().tracker, &perform_request/5)
+  end
+
+  @spec add_issue_label(String.t(), String.t()) :: {:ok, term()} | {:error, term()}
+  def add_issue_label(issue_id, label) when is_binary(issue_id) and is_binary(label) do
+    add_issue_label(issue_id, label, Config.settings!().tracker, &perform_request/5)
+  end
+
+  @spec remove_issue_label(String.t(), String.t()) :: {:ok, term()} | {:error, term()}
+  def remove_issue_label(issue_id, label) when is_binary(issue_id) and is_binary(label) do
+    remove_issue_label(issue_id, label, Config.settings!().tracker, &perform_request/5)
+  end
+
   @spec request(String.t(), String.t(), map(), term(), keyword()) ::
           {:ok, %{status: integer(), body: term()}} | {:error, term()}
   def request(method, path, params, body, opts \\ [])
@@ -74,6 +99,48 @@ defmodule SymphonyElixir.GitHub.Client do
     fetch_issues_by_ids(issue_ids, tracker_settings, request_fun)
   end
 
+  @doc false
+  @spec fetch_issue_for_test(String.t(), map(), function()) :: {:ok, Issue.t()} | {:error, term()}
+  def fetch_issue_for_test(issue_id, tracker_settings, request_fun)
+      when is_binary(issue_id) and is_map(tracker_settings) and is_function(request_fun, 5) do
+    fetch_issue(issue_id, tracker_settings, request_fun)
+  end
+
+  @doc false
+  @spec fetch_issue_comments_for_test(String.t(), map(), function()) ::
+          {:ok, [map()]} | {:error, term()}
+  def fetch_issue_comments_for_test(issue_id, tracker_settings, request_fun)
+      when is_binary(issue_id) and is_map(tracker_settings) and is_function(request_fun, 5) do
+    fetch_issue_comments(issue_id, tracker_settings, request_fun)
+  end
+
+  @doc false
+  @spec append_issue_comment_for_test(String.t(), String.t(), map(), function()) ::
+          {:ok, map()} | {:error, term()}
+  def append_issue_comment_for_test(issue_id, body, tracker_settings, request_fun)
+      when is_binary(issue_id) and is_binary(body) and is_map(tracker_settings) and
+             is_function(request_fun, 5) do
+    append_issue_comment(issue_id, body, tracker_settings, request_fun)
+  end
+
+  @doc false
+  @spec add_issue_label_for_test(String.t(), String.t(), map(), function()) ::
+          {:ok, term()} | {:error, term()}
+  def add_issue_label_for_test(issue_id, label, tracker_settings, request_fun)
+      when is_binary(issue_id) and is_binary(label) and is_map(tracker_settings) and
+             is_function(request_fun, 5) do
+    add_issue_label(issue_id, label, tracker_settings, request_fun)
+  end
+
+  @doc false
+  @spec remove_issue_label_for_test(String.t(), String.t(), map(), function()) ::
+          {:ok, term()} | {:error, term()}
+  def remove_issue_label_for_test(issue_id, label, tracker_settings, request_fun)
+      when is_binary(issue_id) and is_binary(label) and is_map(tracker_settings) and
+             is_function(request_fun, 5) do
+    remove_issue_label(issue_id, label, tracker_settings, request_fun)
+  end
+
   defp fetch_issues_by_states(state_names, tracker_settings, request_fun) do
     normalized_states = state_names |> Enum.map(&normalize_state/1) |> MapSet.new()
 
@@ -99,6 +166,105 @@ defmodule SymphonyElixir.GitHub.Client do
         with {:ok, github_settings} <- settings(tracker_settings) do
           fetch_issue_ids(ids, github_settings, request_fun, [])
         end
+    end
+  end
+
+  defp fetch_issue(issue_id, tracker_settings, request_fun) do
+    with {:ok, issue_number} <- parse_issue_number(issue_id),
+         {:ok, settings} <- settings(tracker_settings),
+         {:ok, payload} <-
+           request_with_settings(
+             "GET",
+             repository_issue_path(settings, issue_number),
+             %{},
+             nil,
+             settings,
+             request_fun,
+             false
+           ),
+         %Issue{} = issue <- normalize_issue(payload, settings.repo) do
+      {:ok, issue}
+    else
+      nil -> {:error, :github_unknown_payload}
+      {:error, _reason} = error -> error
+      _ -> {:error, :github_unknown_payload}
+    end
+  end
+
+  defp fetch_issue_comments(issue_id, tracker_settings, request_fun) do
+    with {:ok, issue_number} <- parse_issue_number(issue_id),
+         {:ok, github_settings} <- settings(tracker_settings) do
+      fetch_issue_comment_pages(github_settings, issue_number, 1, request_fun, [])
+    end
+  end
+
+  defp fetch_issue_comment_pages(settings, issue_number, page, request_fun, acc) do
+    with {:ok, payload} <-
+           request_with_settings(
+             "GET",
+             issue_comments_path(settings, issue_number),
+             %{"per_page" => @page_size, "page" => page},
+             nil,
+             settings,
+             request_fun,
+             false
+           ),
+         true <- is_list(payload) or {:error, :github_comments_not_a_list} do
+      updated_acc = [payload | acc]
+
+      if length(payload) < @page_size do
+        {:ok, updated_acc |> Enum.reverse() |> List.flatten()}
+      else
+        fetch_issue_comment_pages(settings, issue_number, page + 1, request_fun, updated_acc)
+      end
+    end
+  end
+
+  defp append_issue_comment(issue_id, body, tracker_settings, request_fun) do
+    with {:ok, issue_number} <- parse_issue_number(issue_id),
+         {:ok, settings} <- settings(tracker_settings),
+         {:ok, payload} <-
+           request_with_settings(
+             "POST",
+             issue_comments_path(settings, issue_number),
+             %{},
+             %{"body" => body},
+             settings,
+             request_fun,
+             false
+           ),
+         true <- is_map(payload) or {:error, :github_comment_not_a_map} do
+      {:ok, payload}
+    end
+  end
+
+  defp add_issue_label(issue_id, label, tracker_settings, request_fun) do
+    with {:ok, issue_number} <- parse_issue_number(issue_id),
+         {:ok, settings} <- settings(tracker_settings) do
+      request_with_settings(
+        "POST",
+        issue_labels_path(settings, issue_number),
+        %{},
+        %{"labels" => [String.trim(label)]},
+        settings,
+        request_fun,
+        false
+      )
+    end
+  end
+
+  defp remove_issue_label(issue_id, label, tracker_settings, request_fun) do
+    with {:ok, issue_number} <- parse_issue_number(issue_id),
+         {:ok, settings} <- settings(tracker_settings) do
+      request_with_settings(
+        "DELETE",
+        issue_label_path(settings, issue_number, String.trim(label)),
+        %{},
+        nil,
+        settings,
+        request_fun,
+        false
+      )
     end
   end
 
@@ -345,6 +511,15 @@ defmodule SymphonyElixir.GitHub.Client do
 
   defp repository_issue_path(settings, issue_number),
     do: "#{repository_issues_path(settings)}/#{issue_number}"
+
+  defp issue_comments_path(settings, issue_number),
+    do: "#{repository_issue_path(settings, issue_number)}/comments"
+
+  defp issue_labels_path(settings, issue_number),
+    do: "#{repository_issue_path(settings, issue_number)}/labels"
+
+  defp issue_label_path(settings, issue_number, label),
+    do: "#{issue_labels_path(settings, issue_number)}/#{URI.encode(label, &URI.char_unreserved?/1)}"
 
   defp encoded_repo(repo) do
     repo

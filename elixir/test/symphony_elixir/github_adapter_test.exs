@@ -102,6 +102,46 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
            ]
   end
 
+  test "host lifecycle client operations use only the configured issue endpoints" do
+    settings = tracker_settings()
+    test_pid = self()
+
+    request_fun = fn method, path, params, body, _github_settings ->
+      send(test_pid, {:host_github_request, method, path, params, body})
+
+      response =
+        cond do
+          method == "GET" and String.ends_with?(path, "/comments") -> []
+          method == "GET" -> raw_issue(42)
+          method == "POST" and String.ends_with?(path, "/comments") -> %{"id" => 1}
+          true -> []
+        end
+
+      {:ok, %{status: 200, body: response}}
+    end
+
+    assert {:ok, %Issue{id: "42"}} =
+             GitHubClient.fetch_issue_for_test("42", settings, request_fun)
+
+    assert {:ok, []} =
+             GitHubClient.fetch_issue_comments_for_test("42", settings, request_fun)
+
+    assert {:ok, %{"id" => 1}} =
+             GitHubClient.append_issue_comment_for_test("42", "lifecycle", settings, request_fun)
+
+    assert {:ok, []} =
+             GitHubClient.add_issue_label_for_test("42", "symphony:auto", settings, request_fun)
+
+    assert {:ok, []} =
+             GitHubClient.remove_issue_label_for_test("42", "symphony:auto", settings, request_fun)
+
+    assert_received {:host_github_request, "GET", "/repos/octo/repo/issues/42", %{}, nil}
+    assert_received {:host_github_request, "GET", "/repos/octo/repo/issues/42/comments", %{"page" => 1, "per_page" => 100}, nil}
+    assert_received {:host_github_request, "POST", "/repos/octo/repo/issues/42/comments", %{}, %{"body" => "lifecycle"}}
+    assert_received {:host_github_request, "POST", "/repos/octo/repo/issues/42/labels", %{}, %{"labels" => ["symphony:auto"]}}
+    assert_received {:host_github_request, "DELETE", "/repos/octo/repo/issues/42/labels/symphony%3Aauto", %{}, nil}
+  end
+
   test "client normalizes GitHub issues without dropping provider details" do
     issue = GitHubClient.normalize_issue_for_test(raw_issue(42), "octo/repo")
 
