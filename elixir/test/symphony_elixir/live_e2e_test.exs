@@ -441,7 +441,7 @@ defmodule SymphonyElixir.LiveE2ETest do
     instance_config_file = Path.join(instance_config_root, "instance_config.yml")
     worker_setup = live_worker_setup!(backend, run_id, test_root)
     team_key = System.get_env("SYMPHONY_LIVE_LINEAR_TEAM_KEY") || @default_team_key
-    original_instance_config_path = instance_config.instance_config_file_path()
+    original_instance_config_path = InstanceConfig.instance_config_file_path()
     runtime_pid = Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)
 
     File.mkdir_p!(instance_config_root)
@@ -455,7 +455,7 @@ defmodule SymphonyElixir.LiveE2ETest do
                  )
       end
 
-      instance_config.set_instance_config_file_path(instance_config_file)
+      InstanceConfig.set_instance_config_file_path(instance_config_file)
 
       write_instance_config_file!(instance_config_file,
         tracker_api_token: "$LINEAR_API_KEY",
@@ -500,8 +500,7 @@ defmodule SymphonyElixir.LiveE2ETest do
           codex_read_timeout_ms: 60_000,
           codex_turn_timeout_ms: 600_000,
           codex_stall_timeout_ms: 600_000,
-          observability_enabled: false,
-          prompt: live_prompt(project["slugId"])
+          observability_enabled: false
         )
 
         assert :ok = AgentRunner.run(issue, self(), max_turns: 3)
@@ -520,7 +519,7 @@ defmodule SymphonyElixir.LiveE2ETest do
     after
       restart_agent_runtime_if_needed()
       cleanup_live_worker_setup(worker_setup)
-      instance_config.set_instance_config_file_path(original_instance_config_path)
+      InstanceConfig.set_instance_config_file_path(original_instance_config_path)
       File.rm_rf(test_root)
     end
   end

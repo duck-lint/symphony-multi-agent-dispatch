@@ -1,18 +1,31 @@
 defmodule SymphonyElixir.PromptBuilder do
   @moduledoc """
   Builds agent prompts from normalized tracker work item data.
-  """
 
-  alias SymphonyElixir.{Config, instance_config}
+  This temporary host-owned prompt exists only to keep the pre-lifecycle runtime executable.
+  It deliberately does not read prompt content from InstanceConfig; the lifecycle task will
+  replace this seam with SYMPHONY-owned role profiles.
+  """
 
   @render_opts [strict_variables: true, strict_filters: true]
 
+  @temporary_prompt_template """
+  You are working on an issue from the configured tracker.
+
+  Identifier: {{ issue.identifier }}
+  Title: {{ issue.title }}
+
+  Body:
+  {% if issue.description %}
+  {{ issue.description }}
+  {% else %}
+  No description provided.
+  {% endif %}
+  """
+
   @spec build_prompt(SymphonyElixir.Tracker.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
-    template =
-      instance_config.current()
-      |> prompt_template!()
-      |> parse_template!()
+    template = parse_template!(@temporary_prompt_template)
 
     template
     |> Solid.render!(
@@ -23,12 +36,6 @@ defmodule SymphonyElixir.PromptBuilder do
       @render_opts
     )
     |> IO.iodata_to_binary()
-  end
-
-  defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
-
-  defp prompt_template!({:error, reason}) do
-    raise RuntimeError, "instance_config_unavailable: #{inspect(reason)}"
   end
 
   defp parse_template!(prompt) when is_binary(prompt) do
@@ -54,11 +61,4 @@ defmodule SymphonyElixir.PromptBuilder do
   defp to_solid_value(value) when is_list(value), do: Enum.map(value, &to_solid_value/1)
   defp to_solid_value(value), do: value
 
-  defp default_prompt(prompt) when is_binary(prompt) do
-    if String.trim(prompt) == "" do
-      Config.instance_config_prompt()
-    else
-      prompt
-    end
-  end
 end

@@ -43,9 +43,11 @@ defmodule SymphonyElixir.CLITest do
     refute_received :started
   end
 
-  test "defaults to instance_config.yml when instance_config path is missing" do
+  test "defaults to .symphony/instance_config.yml when instance_config path is missing" do
     deps = %{
-      file_regular?: fn path -> Path.basename(path) == "instance_config.yml" end,
+      file_regular?: fn path ->
+        path == Path.expand(Path.join(".symphony", "instance_config.yml"))
+      end,
       set_instance_config_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,

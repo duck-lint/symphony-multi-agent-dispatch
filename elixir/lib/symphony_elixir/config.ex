@@ -1,24 +1,10 @@
 defmodule SymphonyElixir.Config do
   @moduledoc """
-  Runtime configuration loaded from `instance_config.yml`.
+  Runtime configuration loaded from `.symphony/instance_config.yml`.
   """
 
   alias SymphonyElixir.{Config.Schema, Tracker}
-  alias SymphonyElixir.{instance_config, instance_configStore}
-
-  @default_prompt_template """
-  You are working on an issue from the configured tracker.
-
-  Identifier: {{ issue.identifier }}
-  Title: {{ issue.title }}
-
-  Body:
-  {% if issue.description %}
-  {{ issue.description }}
-  {% else %}
-  No description provided.
-  {% endif %}
-  """
+  alias SymphonyElixir.{InstanceConfig, InstanceConfigStore}
 
   @type codex_runtime_settings :: %{
           approval_policy: String.t() | map(),
@@ -28,7 +14,7 @@ defmodule SymphonyElixir.Config do
 
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
-    instance_configStore.settings()
+    InstanceConfigStore.settings()
   end
 
   @spec settings!() :: Schema.t()
@@ -66,17 +52,6 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  @spec instance_config_prompt() :: String.t()
-  def instance_config_prompt do
-    case instance_config.current() do
-      {:ok, %{prompt_template: prompt}} ->
-        if String.trim(prompt) == "", do: @default_prompt_template, else: prompt
-
-      _ ->
-        @default_prompt_template
-    end
-  end
-
   @spec server_port() :: non_neg_integer() | nil
   def server_port do
     case Application.get_env(:symphony_elixir, :server_port_override) do
@@ -88,13 +63,13 @@ defmodule SymphonyElixir.Config do
   @doc false
   @spec local_workspace_root() :: Path.t()
   def local_workspace_root do
-    instance_config_dir = instance_config.instance_config_file_path() |> Path.expand() |> Path.dirname()
+    instance_config_dir = InstanceConfig.instance_config_file_path() |> Path.expand() |> Path.dirname()
     Path.expand(settings!().workspace.root, instance_config_dir)
   end
 
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
-    instance_configStore.force_reload()
+    InstanceConfigStore.force_reload()
   end
 
   @spec codex_runtime_settings(Path.t() | nil, keyword()) ::
@@ -126,19 +101,19 @@ defmodule SymphonyElixir.Config do
   defp format_config_error(reason) do
     case reason do
       {:invalid_instance_config_config, message} ->
-        "Invalid instance_config.yml config: #{message}"
+        "Invalid .symphony/instance_config.yml config: #{message}"
 
       {:missing_instance_config_file, path, raw_reason} ->
-        "Missing instance_config.yml at #{path}: #{inspect(raw_reason)}"
+        "Missing .symphony/instance_config.yml at #{path}: #{inspect(raw_reason)}"
 
       {:instance_config_parse_error, raw_reason} ->
-        "Failed to parse instance_config.yml: #{inspect(raw_reason)}"
+        "Failed to parse .symphony/instance_config.yml: #{inspect(raw_reason)}"
 
-      :instance_config_front_matter_not_a_map ->
-        "Failed to parse instance_config.yml: instance_config front matter must decode to a map"
+      :instance_config_not_a_map ->
+        "Failed to parse .symphony/instance_config.yml: the YAML root must decode to a map"
 
       other ->
-        "Invalid instance_config.yml config: #{inspect(other)}"
+        "Invalid .symphony/instance_config.yml config: #{inspect(other)}"
     end
   end
 end

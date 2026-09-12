@@ -2,7 +2,7 @@ defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
 
   test "config defaults and validation checks" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "memory",
       tracker_api_token: nil,
       tracker_project_slug: nil,
@@ -19,47 +19,47 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.assignee == nil
     assert config.agent.max_turns == 20
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), poll_interval_ms: "invalid")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), poll_interval_ms: "invalid")
 
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "polling.interval_ms"
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), poll_interval_ms: 45_000)
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), poll_interval_ms: 45_000)
     assert Config.settings!().polling.interval_ms == 45_000
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), max_turns: 0)
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), max_turns: 0)
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "agent.max_turns"
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), max_turns: 5)
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), max_turns: 5)
     assert Config.settings!().agent.max_turns == 5
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_active_states: "Todo,  Review,")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_active_states: "Todo,  Review,")
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "tracker.active_states"
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_api_token: "token",
       tracker_project_slug: nil
     )
 
     assert {:error, :missing_linear_project_slug} = Config.validate!()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_api_token: "   ",
       tracker_project_slug: "project"
     )
 
     assert {:error, :missing_linear_api_token} = Config.validate!()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_api_token: "token",
       tracker_project_slug: ""
     )
 
     assert {:error, :missing_linear_project_slug} = Config.validate!()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_project_slug: "project",
       codex_command: ""
     )
@@ -68,68 +68,54 @@ defmodule SymphonyElixir.CoreTest do
     assert message =~ "codex.command"
     assert message =~ "can't be blank"
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), codex_command: "   ")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), codex_command: "   ")
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "codex.command"
     assert message =~ "can't be blank"
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), codex_command: "/bin/sh app-server")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), codex_command: "/bin/sh app-server")
     assert :ok = Config.validate!()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), codex_approval_policy: "definitely-not-valid")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), codex_approval_policy: "definitely-not-valid")
     assert :ok = Config.validate!()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), codex_thread_sandbox: "unsafe-ish")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), codex_thread_sandbox: "unsafe-ish")
     assert :ok = Config.validate!()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       codex_turn_sandbox_policy: %{type: "workspaceWrite", writableRoots: ["relative/path"]}
     )
 
     assert :ok = Config.validate!()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), codex_approval_policy: 123)
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), codex_approval_policy: 123)
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "codex.approval_policy"
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), codex_thread_sandbox: 123)
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), codex_thread_sandbox: 123)
     assert {:error, {:invalid_instance_config_config, message}} = Config.validate!()
     assert message =~ "codex.thread_sandbox"
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "123")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "123")
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
   end
 
   test "current instance_config.yml file is valid and complete" do
-    original_instance_config_path = instance_config.instance_config_file_path()
-    previous_linear_api_key = System.get_env("LINEAR_API_KEY")
+    original_instance_config_path = InstanceConfig.instance_config_file_path()
 
-    on_exit(fn -> instance_config.set_instance_config_file_path(original_instance_config_path) end)
-    on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
+    on_exit(fn -> InstanceConfig.set_instance_config_file_path(original_instance_config_path) end)
 
-    System.put_env("LINEAR_API_KEY", "test-linear-api-key")
-    instance_config.clear_instance_config_file_path()
+    InstanceConfig.clear_instance_config_file_path()
 
-    assert {:ok, %{config: config, prompt: prompt}} = instance_config.load()
+    assert {:ok, %{config: config}} = InstanceConfig.load()
     assert is_map(config)
 
     tracker = Map.get(config, "tracker", %{})
     assert is_map(tracker)
-    assert Map.get(tracker, "kind") == "linear"
-    assert is_binary(get_in(tracker, ["provider", "project_slug"]))
+    assert Map.get(tracker, "kind") == "github"
+    assert get_in(tracker, ["provider", "repo"]) == "duck-lint/symphony-multi-agent-dispatch"
     assert is_list(Map.get(tracker, "active_states"))
     assert is_list(Map.get(tracker, "terminal_states"))
-
-    hooks = Map.get(config, "hooks", %{})
-    assert is_map(hooks)
-    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/openai/symphony ."
-    assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
-    assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
-    assert Map.get(hooks, "before_remove") =~ "cd elixir && mise exec -- mix workspace.before_remove"
-
-    assert String.trim(prompt) != ""
-    assert is_binary(Config.instance_config_prompt())
-    assert Config.instance_config_prompt() == prompt
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do
@@ -139,7 +125,7 @@ defmodule SymphonyElixir.CoreTest do
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
     System.put_env("LINEAR_API_KEY", env_api_key)
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_api_token: nil,
       tracker_project_slug: "project",
       codex_command: "/bin/sh app-server"
@@ -157,7 +143,7 @@ defmodule SymphonyElixir.CoreTest do
     on_exit(fn -> restore_env("LINEAR_ASSIGNEE", previous_linear_assignee) end)
     System.put_env("LINEAR_ASSIGNEE", env_assignee)
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_assignee: nil,
       tracker_project_slug: "project",
       codex_command: "/bin/sh app-server"
@@ -166,55 +152,61 @@ defmodule SymphonyElixir.CoreTest do
     assert Config.settings!().tracker.assignee == env_assignee
   end
 
-  test "instance_config file path defaults to instance_config.yml in the current working directory when app env is unset" do
-    original_instance_config_path = instance_config.instance_config_file_path()
+  test "instance_config file path defaults to .symphony/instance_config.yml when app env is unset" do
+    original_instance_config_path = InstanceConfig.instance_config_file_path()
 
     on_exit(fn ->
-      instance_config.set_instance_config_file_path(original_instance_config_path)
+      InstanceConfig.set_instance_config_file_path(original_instance_config_path)
     end)
 
-    instance_config.clear_instance_config_file_path()
+    InstanceConfig.clear_instance_config_file_path()
 
-    assert instance_config.instance_config_file_path() == Path.join(File.cwd!(), "instance_config.yml")
+    assert InstanceConfig.instance_config_file_path() ==
+             Path.join([File.cwd!(), ".symphony", "instance_config.yml"])
   end
 
   test "instance_config file path resolves from app env when set" do
     app_instance_config_path = "/tmp/app/instance_config.yml"
 
     on_exit(fn ->
-      instance_config.clear_instance_config_file_path()
+      InstanceConfig.clear_instance_config_file_path()
     end)
 
-    instance_config.set_instance_config_file_path(app_instance_config_path)
+    InstanceConfig.set_instance_config_file_path(app_instance_config_path)
 
-    assert instance_config.instance_config_file_path() == app_instance_config_path
+    assert InstanceConfig.instance_config_file_path() == app_instance_config_path
   end
 
-  test "instance_config load accepts prompt-only files without front matter" do
-    instance_config_path = Path.join(Path.dirname(instance_config.instance_config_file_path()), "PROMPT_ONLY_instance_config.yml")
-    File.write!(instance_config_path, "Prompt only\n")
+  test "instance_config load accepts plain YAML maps without a prompt body" do
+    instance_config_path =
+      Path.join(Path.dirname(InstanceConfig.instance_config_file_path()), "PLAIN_instance_config.yml")
 
-    assert {:ok, %{config: %{}, prompt: "Prompt only", prompt_template: "Prompt only"}} =
-             instance_config.load(instance_config_path)
+    File.write!(instance_config_path, "tracker:\n  kind: memory\n")
+
+    assert {:ok, %{config: %{"tracker" => %{"kind" => "memory"}}}} =
+             InstanceConfig.load(instance_config_path)
   end
 
-  test "instance_config load accepts unterminated front matter with an empty prompt" do
-    instance_config_path = Path.join(Path.dirname(instance_config.instance_config_file_path()), "UNTERMINATED_instance_config.yml")
-    File.write!(instance_config_path, "---\ntracker:\n  kind: linear\n")
+  test "instance_config load rejects YAML roots that are not maps" do
+    instance_config_path =
+      Path.join(Path.dirname(InstanceConfig.instance_config_file_path()), "INVALID_ROOT_instance_config.yml")
 
-    assert {:ok, %{config: %{"tracker" => %{"kind" => "linear"}}, prompt: "", prompt_template: ""}} =
-             instance_config.load(instance_config_path)
+    File.write!(instance_config_path, "- not-a-map\n")
+
+    assert {:error, :instance_config_not_a_map} = InstanceConfig.load(instance_config_path)
   end
 
-  test "instance_config load rejects non-map front matter" do
-    instance_config_path = Path.join(Path.dirname(instance_config.instance_config_file_path()), "INVALID_FRONT_MATTER_instance_config.yml")
-    File.write!(instance_config_path, "---\n- not-a-map\n---\nPrompt body\n")
+  test "instance_config load reports malformed YAML" do
+    instance_config_path =
+      Path.join(Path.dirname(InstanceConfig.instance_config_file_path()), "MALFORMED_instance_config.yml")
 
-    assert {:error, :instance_config_front_matter_not_a_map} = instance_config.load(instance_config_path)
+    File.write!(instance_config_path, "tracker: [\n")
+
+    assert {:error, {:instance_config_parse_error, _reason}} = InstanceConfig.load(instance_config_path)
   end
 
   test "SymphonyElixir.start_link starts the agent runtime" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "memory")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     runtime_pid = Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)
 
@@ -249,7 +241,7 @@ defmodule SymphonyElixir.CoreTest do
   test "orchestrator fails startup when semantic preflight fails" do
     issue_suffix = System.unique_integer([:positive])
     orchestrator_name = Module.concat(__MODULE__, "InvalidOrchestrator#{issue_suffix}")
-    instance_config_path = instance_config.instance_config_file_path()
+    instance_config_path = InstanceConfig.instance_config_file_path()
 
     on_exit(fn ->
       if pid = Process.whereis(orchestrator_name) do
@@ -258,8 +250,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_instance_config_file!(instance_config_path, tracker_kind: "memory")
 
-      if is_nil(Process.whereis(instance_configStore)) do
-        assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, instance_configStore)
+      if is_nil(Process.whereis(InstanceConfigStore)) do
+        assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, InstanceConfigStore)
       end
 
       if is_nil(Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)) do
@@ -277,9 +269,9 @@ defmodule SymphonyElixir.CoreTest do
                SymphonyElixir.AgentRuntimeSupervisor
              )
 
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, instance_configStore)
+    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, InstanceConfigStore)
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_api_token: "token",
       tracker_project_slug: nil
     )
@@ -306,7 +298,7 @@ defmodule SymphonyElixir.CoreTest do
       end
     end)
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "memory")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "memory")
 
     assert {:ok, runtime_pid} =
              SymphonyElixir.AgentRuntimeSupervisor.start_link(
@@ -318,7 +310,7 @@ defmodule SymphonyElixir.CoreTest do
     Process.unlink(runtime_pid)
     original_orchestrator_pid = Process.whereis(orchestrator_name)
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "linear",
       tracker_api_token: "token",
       tracker_project_slug: nil
@@ -394,7 +386,7 @@ defmodule SymphonyElixir.CoreTest do
                )
     end
 
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "memory",
       workspace_root: test_root,
       poll_interval_ms: 10,
@@ -487,7 +479,7 @@ defmodule SymphonyElixir.CoreTest do
     workspace = Path.join(test_root, issue_identifier)
 
     try do
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: test_root,
         tracker_active_states: ["Todo", "In Progress", "In Review"],
         tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"]
@@ -552,7 +544,7 @@ defmodule SymphonyElixir.CoreTest do
     cleanup_marker = Path.join(test_root, "cleanup-order")
 
     try do
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: test_root,
         tracker_active_states: ["Todo", "In Progress", "In Review"],
         tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"],
@@ -630,7 +622,7 @@ defmodule SymphonyElixir.CoreTest do
     new_workspace = Path.join(new_root, issue_identifier)
 
     try do
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: old_root,
         tracker_active_states: ["Todo", "In Progress", "In Review"],
         tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"]
@@ -662,7 +654,7 @@ defmodule SymphonyElixir.CoreTest do
         retry_attempts: %{}
       }
 
-      write_instance_config_file!(instance_config.instance_config_file_path(), workspace_root: new_root)
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(), workspace_root: new_root)
 
       issue = %Issue{
         id: issue_id,
@@ -694,7 +686,7 @@ defmodule SymphonyElixir.CoreTest do
     issue_identifier = "MT-557"
 
     try do
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         tracker_kind: "memory",
         workspace_root: test_root,
         tracker_active_states: ["Todo", "In Progress", "In Review"],
@@ -848,7 +840,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "reconcile stops running issue when a required label is removed" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_required_labels: ["symphony"])
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_required_labels: ["symphony"])
 
     issue_id = "issue-unlabeled"
 
@@ -895,7 +887,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "reconcile releases a blocked issue when a required label is removed" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_required_labels: ["symphony"])
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_required_labels: ["symphony"])
 
     issue_id = "blocked-unlabeled"
 
@@ -926,7 +918,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "retry releases its claim when a required label is removed" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_required_labels: ["symphony"])
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_required_labels: ["symphony"])
 
     issue_id = "retry-unlabeled"
 
@@ -963,7 +955,7 @@ defmodule SymphonyElixir.CoreTest do
     issue_id = "retry-refreshed-issue"
 
     try do
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         tracker_kind: "memory",
         workspace_root: test_root,
         hook_before_run: "exit 1"
@@ -1002,7 +994,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "agent runner does not continue after a required label is removed" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_required_labels: ["symphony"])
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_required_labels: ["symphony"])
 
     issue = %Issue{
       id: "issue-label-continuation",
@@ -1209,7 +1201,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "select_worker_host_for_test skips full ssh hosts under the shared per-host cap" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       worker_ssh_hosts: ["worker-a", "worker-b"],
       worker_max_concurrent_agents_per_host: 1
     )
@@ -1224,7 +1216,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "select_worker_host_for_test returns no_worker_capacity when every ssh host is full" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       worker_ssh_hosts: ["worker-a", "worker-b"],
       worker_max_concurrent_agents_per_host: 1
     )
@@ -1240,7 +1232,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "select_worker_host_for_test keeps the preferred ssh host when it still has capacity" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       worker_ssh_hosts: ["worker-a", "worker-b"],
       worker_max_concurrent_agents_per_host: 2
     )
@@ -1302,138 +1294,28 @@ defmodule SymphonyElixir.CoreTest do
     assert {:ok, []} = Client.fetch_issues_by_states([])
   end
 
-  test "prompt builder renders issue and attempt values from instance_config template" do
-    instance_config_prompt =
-      "Ticket {{ issue.identifier }} {{ issue.title }} labels={{ issue.labels }} attempt={{ attempt }}"
-
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: instance_config_prompt)
-
-    issue = %Issue{
-      identifier: "S-1",
-      title: "Refactor backend request path",
-      description: "Replace transport layer",
-      state: "Todo",
-      url: "https://example.org/issues/S-1",
-      labels: ["backend"]
-    }
-
-    prompt = PromptBuilder.build_prompt(issue, attempt: 3)
-
-    assert prompt =~ "Ticket S-1 Refactor backend request path"
-    assert prompt =~ "labels=backend"
-    assert prompt =~ "attempt=3"
-  end
-
-  test "prompt builder renders issue datetime fields without crashing" do
-    instance_config_prompt = "Ticket {{ issue.identifier }} created={{ issue.created_at }} updated={{ issue.updated_at }}"
-
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: instance_config_prompt)
-
-    created_at = DateTime.from_naive!(~N[2026-02-26 18:06:48], "Etc/UTC")
-    updated_at = DateTime.from_naive!(~N[2026-02-26 18:07:03], "Etc/UTC")
-
-    issue = %Issue{
-      identifier: "MT-697",
-      title: "Live smoke",
-      description: "Prompt should serialize datetimes",
-      state: "Todo",
-      url: "https://example.org/issues/MT-697",
-      labels: [],
-      created_at: created_at,
-      updated_at: updated_at
-    }
-
-    prompt = PromptBuilder.build_prompt(issue)
-
-    assert prompt =~ "Ticket MT-697"
-    assert prompt =~ "created=2026-02-26T18:06:48Z"
-    assert prompt =~ "updated=2026-02-26T18:07:03Z"
-  end
-
-  test "prompt builder normalizes nested date-like values, maps, and structs in issue fields" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: "Ticket {{ issue.identifier }}")
-
-    issue = %Issue{
-      identifier: "MT-701",
-      title: "Serialize nested values",
-      description: "Prompt builder should normalize nested terms",
-      state: "Todo",
-      url: "https://example.org/issues/MT-701",
-      labels: [
-        ~N[2026-02-27 12:34:56],
-        ~D[2026-02-28],
-        ~T[12:34:56],
-        %{phase: "test"},
-        URI.parse("https://example.org/issues/MT-701")
-      ]
-    }
-
-    assert PromptBuilder.build_prompt(issue) == "Ticket MT-701"
-  end
-
-  test "prompt builder uses strict variable rendering" do
-    instance_config_prompt = "Work on ticket {{ missing.ticket_id }} and follow these steps."
-
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: instance_config_prompt)
-
-    issue = %Issue{
-      identifier: "MT-123",
-      title: "Investigate broken sync",
-      description: "Reproduce and fix",
-      state: "In Progress",
-      url: "https://example.org/issues/MT-123",
-      labels: ["bug"]
-    }
-
-    assert_raise Solid.RenderError, fn ->
-      PromptBuilder.build_prompt(issue)
-    end
-  end
-
-  test "prompt builder surfaces invalid template content with prompt context" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: "{% if issue.identifier %}")
-
-    issue = %Issue{
-      identifier: "MT-999",
-      title: "Broken prompt",
-      description: "Invalid template syntax",
-      state: "Todo",
-      url: "https://example.org/issues/MT-999",
-      labels: []
-    }
-
-    assert_raise RuntimeError, ~r/template_parse_error:.*template="/s, fn ->
-      PromptBuilder.build_prompt(issue)
-    end
-  end
-
-  test "prompt builder uses a sensible default template when instance_config prompt is blank" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: "   \n")
+  test "prompt builder uses a temporary host-owned template independent of instance_config" do
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "memory")
 
     issue = %Issue{
       identifier: "MT-777",
-      title: "Make fallback prompt useful",
-      description: "Include enough issue context to start working.",
+      title: "Keep prompt ownership separate",
+      description: "The instance config must not supply prompt prose.",
       state: "In Progress",
       url: "https://example.org/issues/MT-777",
-      labels: ["prompt"]
+      labels: []
     }
 
     prompt = PromptBuilder.build_prompt(issue)
 
     assert prompt =~ "You are working on an issue from the configured tracker."
     assert prompt =~ "Identifier: MT-777"
-    assert prompt =~ "Title: Make fallback prompt useful"
+    assert prompt =~ "Title: Keep prompt ownership separate"
     assert prompt =~ "Body:"
-    assert prompt =~ "Include enough issue context to start working."
-    assert Config.instance_config_prompt() =~ "{{ issue.identifier }}"
-    assert Config.instance_config_prompt() =~ "{{ issue.title }}"
-    assert Config.instance_config_prompt() =~ "{{ issue.description }}"
+    assert prompt =~ "The instance config must not supply prompt prose."
   end
 
-  test "prompt builder default template handles missing issue body" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: "")
-
+  test "prompt builder temporary template handles missing issue body" do
     issue = %Issue{
       identifier: "MT-778",
       title: "Handle empty body",
@@ -1450,22 +1332,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "No description provided."
   end
 
-  test "prompt builder reports instance_config load failures separately from template parse errors" do
-    original_instance_config_path = instance_config.instance_config_file_path()
-    instance_config_store_pid = Process.whereis(SymphonyElixir.instance_configStore)
-
-    on_exit(fn ->
-      instance_config.set_instance_config_file_path(original_instance_config_path)
-
-      if is_pid(instance_config_store_pid) and is_nil(Process.whereis(SymphonyElixir.instance_configStore)) do
-        Supervisor.restart_child(SymphonyElixir.Supervisor, SymphonyElixir.instance_configStore)
-      end
-    end)
-
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.instance_configStore)
-
-    instance_config.set_instance_config_file_path(Path.join(System.tmp_dir!(), "missing-instance_config-#{System.unique_integer([:positive])}.md"))
-
+  test "prompt builder does not fail when instance_config is unavailable" do
     issue = %Issue{
       identifier: "MT-780",
       title: "instance_config unavailable",
@@ -1475,64 +1342,30 @@ defmodule SymphonyElixir.CoreTest do
       labels: []
     }
 
-    assert_raise RuntimeError, ~r/instance_config_unavailable:/, fn ->
-      PromptBuilder.build_prompt(issue)
-    end
+    assert PromptBuilder.build_prompt(issue) =~ "Identifier: MT-780"
   end
 
-  test "in-repo instance_config.yml renders correctly" do
-    instance_config_path = instance_config.instance_config_file_path()
-    previous_linear_api_key = System.get_env("LINEAR_API_KEY")
-
-    on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
-
-    System.put_env("LINEAR_API_KEY", "test-linear-api-key")
-    instance_config.set_instance_config_file_path(Path.expand("instance_config.yml", File.cwd!()))
+  test "in-repo instance_config.yml is configuration only" do
+    instance_config_path = InstanceConfig.instance_config_file_path()
+    InstanceConfig.clear_instance_config_file_path()
 
     issue = %Issue{
       identifier: "MT-616",
-      title: "Use rich templates for instance_config.yml",
-      description: "Render with rich template variables",
+      title: "Use plain YAML for instance_config.yml",
+      description: "Configuration must not become a prompt source.",
       state: "In Progress",
-      url: "https://example.org/issues/MT-616/use-rich-templates-for-instance_configmd",
-      labels: ["templating", "instance_config"]
+      url: "https://example.org/issues/MT-616",
+      labels: ["configuration"]
     }
 
-    on_exit(fn -> instance_config.set_instance_config_file_path(instance_config_path) end)
+    on_exit(fn -> InstanceConfig.set_instance_config_file_path(instance_config_path) end)
+
+    assert {:ok, %{config: config}} = InstanceConfig.load()
+    refute Map.has_key?(config, "prompt")
 
     prompt = PromptBuilder.build_prompt(issue, attempt: 2)
 
-    assert prompt =~ "You are working on a Linear ticket `MT-616`"
-    assert prompt =~ "Issue context:"
     assert prompt =~ "Identifier: MT-616"
-    assert prompt =~ "Title: Use rich templates for instance_config.yml"
-    assert prompt =~ "Current status: In Progress"
-    assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-instance_configmd"
-    assert prompt =~ "This is an unattended orchestration session."
-    assert prompt =~ "Only stop early for a true external blocker"
-    assert prompt =~ "Do not include \"next steps for user\""
-    assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
-    assert prompt =~ "Do not call `gh pr merge` directly"
-    assert prompt =~ "Follow-up context:"
-    assert prompt =~ "follow-up attempt #2"
-  end
-
-  test "prompt builder adds continuation guidance for retries" do
-    instance_config_prompt = "{% if attempt %}Retry #" <> "{{ attempt }}" <> "{% endif %}"
-    write_instance_config_file!(instance_config.instance_config_file_path(), prompt: instance_config_prompt)
-
-    issue = %Issue{
-      identifier: "MT-201",
-      title: "Continue autonomous ticket",
-      description: "Retry flow",
-      state: "In Progress",
-      url: "https://example.org/issues/MT-201",
-      labels: []
-    }
-
-    prompt = PromptBuilder.build_prompt(issue, attempt: 2)
-
-    assert prompt == "Retry #2"
   end
 
   test "agent runner keeps workspace after successful codex run" do
@@ -1583,7 +1416,7 @@ defmodule SymphonyElixir.CoreTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         codex_command: "#{codex_binary} app-server"
@@ -1668,7 +1501,7 @@ defmodule SymphonyElixir.CoreTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         codex_command: "#{codex_binary} app-server"
@@ -1752,7 +1585,7 @@ defmodule SymphonyElixir.CoreTest do
 
       File.chmod!(fake_ssh, 0o755)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: "~/.symphony-remote-workspaces",
         worker_ssh_hosts: ["worker-a", "worker-b"]
       )
@@ -1834,7 +1667,7 @@ defmodule SymphonyElixir.CoreTest do
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         codex_command: "#{codex_binary} app-server",
@@ -1965,7 +1798,7 @@ defmodule SymphonyElixir.CoreTest do
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         codex_command: "#{codex_binary} app-server",
@@ -2065,7 +1898,7 @@ defmodule SymphonyElixir.CoreTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server"
       )
@@ -2209,7 +2042,7 @@ defmodule SymphonyElixir.CoreTest do
 
       File.chmod!(codex_binary, 0o755)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} --config 'model=\"gpt-5.5\"' app-server"
       )
@@ -2298,7 +2131,7 @@ defmodule SymphonyElixir.CoreTest do
       workspace_cache = Path.join(Path.expand(workspace), ".cache")
       File.mkdir_p!(workspace_cache)
 
-      write_instance_config_file!(instance_config.instance_config_file_path(),
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
         codex_approval_policy: "on-request",

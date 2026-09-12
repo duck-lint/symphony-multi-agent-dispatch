@@ -37,7 +37,7 @@ defmodule SymphonyElixir.Application do
 
     children = [
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
-      SymphonyElixir.instance_configStore,
+      SymphonyElixir.InstanceConfigStore,
       SymphonyElixir.AgentRuntimeSupervisor,
       SymphonyElixir.HttpServer,
       SymphonyElixir.StatusDashboard

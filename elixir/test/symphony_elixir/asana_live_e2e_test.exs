@@ -26,7 +26,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
     instance_config_file = Path.join(instance_config_root, "instance_config.yml")
     workspace_root = Path.join(test_root, "workspaces")
     codex_home = isolated_codex_home!(test_root)
-    original_instance_config_path = instance_config.instance_config_file_path()
+    original_instance_config_path = InstanceConfig.instance_config_file_path()
     runtime_pid = Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)
 
     File.mkdir_p!(instance_config_root)
@@ -55,7 +55,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
                  )
 
         stop_agent_runtime_if_running(runtime_pid)
-        instance_config.set_instance_config_file_path(instance_config_file)
+        InstanceConfig.set_instance_config_file_path(instance_config_file)
 
         write_instance_config!(
           instance_config_file,
@@ -109,7 +109,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
     after
       cleanup_result = delete_project(project_gid, token)
       project_readback = get_resource("/projects/#{project_gid}", token)
-      instance_config.set_instance_config_file_path(original_instance_config_path)
+      InstanceConfig.set_instance_config_file_path(original_instance_config_path)
       restart_agent_runtime_if_needed(runtime_pid)
       File.rm_rf(test_root)
       assert :ok = cleanup_result
@@ -156,7 +156,7 @@ defmodule SymphonyElixir.Asana.LiveE2ETest do
       """
     )
 
-    assert :ok = SymphonyElixir.instance_configStore.force_reload()
+    assert :ok = SymphonyElixir.InstanceConfigStore.force_reload()
   end
 
   defp live_prompt(project_gid, done_section_gid, expected_comment) do

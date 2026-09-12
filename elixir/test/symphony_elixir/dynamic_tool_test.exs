@@ -44,7 +44,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   end
 
   test "bound tools keep the adapter and auth snapshot from session startup" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "linear",
       tracker_api_token: "session-token",
       tracker_project_slug: "session-project"
@@ -52,7 +52,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
     binding = BoundDynamicTool.bind()
 
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "memory")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "memory")
     assert BoundDynamicTool.bind().tool_specs == []
 
     test_pid = self()
@@ -278,7 +278,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
     assert Jason.decode!(missing_token["output"]) == %{
              "error" => %{
-               "message" => "Symphony is missing Linear auth. Set `tracker.provider.api_key` in `instance_config.yml` or export `LINEAR_API_KEY`."
+               "message" => "Symphony is missing Linear auth. Set `tracker.provider.api_key` in `.symphony/instance_config.yml` or export `LINEAR_API_KEY`."
              }
            }
 

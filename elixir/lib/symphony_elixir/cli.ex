@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.CLI do
   @moduledoc """
-  Escript entrypoint for running Symphony with an explicit instance_config.yml path.
+  Escript entrypoint for running Symphony with an explicit `.symphony/instance_config.yml` path.
   """
 
   alias SymphonyElixir.LogFile
@@ -42,7 +42,7 @@ defmodule SymphonyElixir.CLI do
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
              :ok <- maybe_set_server_port(opts, deps) do
-          run(Path.expand("instance_config.yml"), deps)
+          run(Path.expand(Path.join(".symphony", "instance_config.yml")), deps)
         end
 
       {opts, [instance_config_path], []} ->
@@ -78,14 +78,14 @@ defmodule SymphonyElixir.CLI do
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-instance_config.yml]"
+    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-.symphony/instance_config.yml]"
   end
 
   @spec runtime_deps() :: deps()
   defp runtime_deps(ensure_all_started \\ fn -> Application.ensure_all_started(:symphony_elixir) end) do
     %{
       file_regular?: &File.regular?/1,
-      set_instance_config_file_path: &SymphonyElixir.instance_config.set_instance_config_file_path/1,
+      set_instance_config_file_path: &SymphonyElixir.InstanceConfig.set_instance_config_file_path/1,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: ensure_all_started

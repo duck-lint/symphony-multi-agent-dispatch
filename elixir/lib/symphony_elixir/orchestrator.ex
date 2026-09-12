@@ -265,37 +265,37 @@ defmodule SymphonyElixir.Orchestrator do
       choose_issues(issues, state)
     else
       {:error, :missing_linear_api_token} ->
-        Logger.error("Tracker API token missing in instance_config.yml")
+        Logger.error("Tracker API token missing in .symphony/instance_config.yml")
         state
 
       {:error, :missing_linear_project_slug} ->
-        Logger.error("Tracker project scope missing in instance_config.yml")
+        Logger.error("Tracker project scope missing in .symphony/instance_config.yml")
         state
 
       {:error, :missing_tracker_kind} ->
-        Logger.error("Tracker kind missing in instance_config.yml")
+        Logger.error("Tracker kind missing in .symphony/instance_config.yml")
 
         state
 
       {:error, {:unsupported_tracker_kind, kind}} ->
-        Logger.error("Unsupported tracker kind in instance_config.yml: #{inspect(kind)}")
+        Logger.error("Unsupported tracker kind in .symphony/instance_config.yml: #{inspect(kind)}")
 
         state
 
       {:error, {:invalid_instance_config_config, message}} ->
-        Logger.error("Invalid instance_config.yml config: #{message}")
+        Logger.error("Invalid .symphony/instance_config.yml config: #{message}")
         state
 
       {:error, {:missing_instance_config_file, path, reason}} ->
-        Logger.error("Missing instance_config.yml at #{path}: #{inspect(reason)}")
+        Logger.error("Missing .symphony/instance_config.yml at #{path}: #{inspect(reason)}")
         state
 
-      {:error, :instance_config_front_matter_not_a_map} ->
-        Logger.error("Failed to parse instance_config.yml: instance_config front matter must decode to a map")
+      {:error, :instance_config_not_a_map} ->
+        Logger.error("Failed to parse .symphony/instance_config.yml: YAML root must decode to a map")
         state
 
       {:error, {:instance_config_parse_error, reason}} ->
-        Logger.error("Failed to parse instance_config.yml: #{inspect(reason)}")
+        Logger.error("Failed to parse .symphony/instance_config.yml: #{inspect(reason)}")
         state
 
       {:error, reason} ->

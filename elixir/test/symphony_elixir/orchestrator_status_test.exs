@@ -800,7 +800,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator triggers an immediate poll cycle shortly after startup" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "memory",
       poll_interval_ms: 5_000
     )
@@ -852,7 +852,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator poll cycle resets next refresh countdown after a check" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "memory",
       poll_interval_ms: 50
     )
@@ -901,7 +901,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator restarts stalled workers with retry backoff" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "memory",
       codex_stall_timeout_ms: 1_000
     )
@@ -973,7 +973,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator blocks stalled workers that are waiting on MCP elicitation" do
-    write_instance_config_file!(instance_config.instance_config_file_path(),
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
       tracker_kind: "memory",
       codex_stall_timeout_ms: 1_000
     )
@@ -1059,7 +1059,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator blocks failed workers after app-server reports input required" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "memory")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "memory")
 
     issue_id = "issue-input-required"
     orchestrator_name = Module.concat(__MODULE__, :InputRequiredBlockOrchestrator)
@@ -1114,7 +1114,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator blocks normal worker exits after input required completion" do
-    write_instance_config_file!(instance_config.instance_config_file_path(), tracker_kind: "memory")
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(), tracker_kind: "memory")
 
     issue_id = "issue-input-required-normal"
     orchestrator_name = Module.concat(__MODULE__, :InputRequiredNormalBlockOrchestrator)

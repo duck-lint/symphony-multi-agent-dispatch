@@ -1,0 +1,24 @@
+tracker:
+  kind: github
+  provider:
+    repo: "duck-lint/symphony-multi-agent-dispatch"
+    token: $GITHUB_TOKEN
+  required_labels: []
+  active_states:
+    - open
+  terminal_states:
+    - closed
+polling:
+  interval_ms: 30000
+workspace:
+  root: ~/code/symphony-workspaces
+agent:
+  max_concurrent_agents: 10
+  max_turns: 20
+codex:
+  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
+  approval_policy: on-request
+  thread_sandbox: workspace-write
+  turn_sandbox_policy:
+    type: workspaceWrite
+    networkAccess: false

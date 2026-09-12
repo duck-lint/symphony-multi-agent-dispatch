@@ -1,6 +1,7 @@
-defmodule SymphonyElixir.instance_configStore do
+defmodule SymphonyElixir.InstanceConfigStore do
   @moduledoc """
-  Caches the last known good instance_config and reloads it when `instance_config.yml` changes.
+  Caches the last known good runtime configuration and reloads it when `.symphony/instance_config.yml`
+  changes.
   """
 
   use GenServer
@@ -8,7 +9,7 @@ defmodule SymphonyElixir.instance_configStore do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.instance_config
+  alias SymphonyElixir.InstanceConfig
 
   @poll_interval_ms 1_000
 
@@ -23,14 +24,14 @@ defmodule SymphonyElixir.instance_configStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @spec current() :: {:ok, instance_config.loaded_instance_config()} | {:error, term()}
+  @spec current() :: {:ok, InstanceConfig.loaded_instance_config()} | {:error, term()}
   def current do
     case Process.whereis(__MODULE__) do
       pid when is_pid(pid) ->
         GenServer.call(__MODULE__, :current)
 
       _ ->
-        instance_config.load()
+        InstanceConfig.load()
     end
   end
 
@@ -41,7 +42,7 @@ defmodule SymphonyElixir.instance_configStore do
         GenServer.call(__MODULE__, :settings)
 
       _ ->
-        case load_state(instance_config.instance_config_file_path()) do
+        case load_state(InstanceConfig.instance_config_file_path()) do
           {:ok, %State{settings: settings}} -> {:ok, settings}
           {:error, reason} -> {:error, reason}
         end
@@ -55,7 +56,7 @@ defmodule SymphonyElixir.instance_configStore do
         GenServer.call(__MODULE__, :force_reload)
 
       _ ->
-        case load_state(instance_config.instance_config_file_path()) do
+        case load_state(InstanceConfig.instance_config_file_path()) do
           {:ok, _state} -> :ok
           {:error, reason} -> {:error, reason}
         end
@@ -64,7 +65,7 @@ defmodule SymphonyElixir.instance_configStore do
 
   @impl true
   def init(_opts) do
-    case load_state(instance_config.instance_config_file_path()) do
+    case load_state(InstanceConfig.instance_config_file_path()) do
       {:ok, state} ->
         schedule_poll()
         {:ok, state}
@@ -120,7 +121,7 @@ defmodule SymphonyElixir.instance_configStore do
   end
 
   defp reload_state(%State{} = state) do
-    path = instance_config.instance_config_file_path()
+    path = InstanceConfig.instance_config_file_path()
 
     if path != state.path do
       reload_path(path, state)
@@ -155,11 +156,11 @@ defmodule SymphonyElixir.instance_configStore do
   end
 
   defp load_state(path) do
-    with {:ok, instance_config} <- instance_config.load(path),
-         {:ok, settings} <- Schema.parse(instance_config.config),
+    with {:ok, loaded_config} <- InstanceConfig.load(path),
+         {:ok, settings} <- Schema.parse(loaded_config.config),
          :ok <- Config.validate_settings(settings),
          {:ok, stamp} <- current_stamp(path) do
-      {:ok, %State{path: path, stamp: stamp, instance_config: instance_config, settings: settings}}
+      {:ok, %State{path: path, stamp: stamp, instance_config: loaded_config, settings: settings}}
     else
       {:error, reason} ->
         {:error, reason}

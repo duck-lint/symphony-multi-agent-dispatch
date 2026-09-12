@@ -378,7 +378,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
 
     on_exit(fn -> restore_env(token_env, previous_token) end)
 
-    write_github_instance_config!(instance_config.instance_config_file_path(), "$#{token_env}")
+    write_github_instance_config!(InstanceConfig.instance_config_file_path(), "$#{token_env}")
 
     binding = Tracker.bind_agent_tools()
 
@@ -446,8 +446,8 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
       """
     )
 
-    if Process.whereis(SymphonyElixir.instance_configStore) do
-      assert :ok = SymphonyElixir.instance_configStore.force_reload()
+    if Process.whereis(SymphonyElixir.InstanceConfigStore) do
+      assert :ok = SymphonyElixir.InstanceConfigStore.force_reload()
     end
   end
 end

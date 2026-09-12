@@ -1,6 +1,4 @@
 defmodule SymphonyElixir.TestSupport do
-  @instance_config_prompt "You are an agent for this repository."
-
   defmacro __using__(_opts) do
     quote do
       use ExUnit.Case
@@ -17,8 +15,8 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
       alias SymphonyElixir.Tracker.Issue
-      alias SymphonyElixir.instance_config
-      alias SymphonyElixir.instance_configStore
+      alias SymphonyElixir.InstanceConfig
+      alias SymphonyElixir.InstanceConfigStore
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
@@ -34,8 +32,8 @@ defmodule SymphonyElixir.TestSupport do
         File.mkdir_p!(instance_config_root)
         instance_config_file = Path.join(instance_config_root, "instance_config.yml")
         write_instance_config_file!(instance_config_file)
-        instance_config.set_instance_config_file_path(instance_config_file)
-        if Process.whereis(SymphonyElixir.instance_configStore), do: SymphonyElixir.instance_configStore.force_reload()
+        InstanceConfig.set_instance_config_file_path(instance_config_file)
+        if Process.whereis(SymphonyElixir.InstanceConfigStore), do: SymphonyElixir.InstanceConfigStore.force_reload()
         stop_default_http_server()
 
         on_exit(fn ->
@@ -54,9 +52,9 @@ defmodule SymphonyElixir.TestSupport do
     instance_config = instance_config_content(overrides)
     File.write!(path, instance_config)
 
-    if Process.whereis(SymphonyElixir.instance_configStore) do
+    if Process.whereis(SymphonyElixir.InstanceConfigStore) do
       try do
-        SymphonyElixir.instance_configStore.force_reload()
+        SymphonyElixir.InstanceConfigStore.force_reload()
       catch
         :exit, _reason -> :ok
       end
@@ -123,8 +121,7 @@ defmodule SymphonyElixir.TestSupport do
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
           server_port: nil,
-          server_host: nil,
-          prompt: @instance_config_prompt
+          server_host: nil
         ],
         overrides
       )
@@ -162,11 +159,8 @@ defmodule SymphonyElixir.TestSupport do
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
     server_port = Keyword.get(config, :server_port)
     server_host = Keyword.get(config, :server_host)
-    prompt = Keyword.get(config, :prompt)
-
     sections =
       [
-        "---",
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
         "  endpoint: #{yaml_value(tracker_endpoint)}",
@@ -196,9 +190,7 @@ defmodule SymphonyElixir.TestSupport do
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
-        server_yaml(server_port, server_host),
-        "---",
-        prompt
+        server_yaml(server_port, server_host)
       ]
       |> Enum.reject(&(&1 in [nil, ""]))
 

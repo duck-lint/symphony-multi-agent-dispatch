@@ -23,7 +23,7 @@ defmodule SymphonyElixir.Jira.LiveE2ETest do
     instance_config_file = Path.join(instance_config_root, "instance_config.yml")
     workspace_root = Path.join(test_root, "workspaces")
     codex_home = isolated_codex_home!(test_root)
-    original_instance_config_path = instance_config.instance_config_file_path()
+    original_instance_config_path = InstanceConfig.instance_config_file_path()
     runtime_pid = Process.whereis(SymphonyElixir.AgentRuntimeSupervisor)
     issue_type_id = issue_type_id!(base_url, email, api_token, project_key)
 
@@ -58,7 +58,7 @@ defmodule SymphonyElixir.Jira.LiveE2ETest do
       assert %Issue{} = issue = JiraClient.normalize_issue_for_test(raw_issue, settings)
 
       stop_agent_runtime_if_running(runtime_pid)
-      instance_config.set_instance_config_file_path(instance_config_file)
+      InstanceConfig.set_instance_config_file_path(instance_config_file)
 
       write_instance_config!(
         instance_config_file,
@@ -124,7 +124,7 @@ defmodule SymphonyElixir.Jira.LiveE2ETest do
           %{}
         )
 
-      instance_config.set_instance_config_file_path(original_instance_config_path)
+      InstanceConfig.set_instance_config_file_path(original_instance_config_path)
       restart_agent_runtime_if_needed(runtime_pid)
       File.rm_rf(test_root)
       assert :ok = delete_result
@@ -172,7 +172,7 @@ defmodule SymphonyElixir.Jira.LiveE2ETest do
       """
     )
 
-    assert :ok = SymphonyElixir.instance_configStore.force_reload()
+    assert :ok = SymphonyElixir.InstanceConfigStore.force_reload()
   end
 
   defp live_prompt(issue_id, project_key, terminal_state, expected_comment) do
