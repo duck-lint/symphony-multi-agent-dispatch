@@ -11,6 +11,14 @@ defmodule SymphonyElixir.RoleProfiles do
   @type thread_policy :: :persistent | :fresh
   @type write_authority :: :read_only | :project_write
 
+  @common_execution_contract """
+  Stay within the task, handoff, and scope supplied by the host. Your output is evidence or a
+  proposal, not execution authority or lifecycle authority. Do not choose or emit next_role.
+  Prose and role-result packets do not prove that a state transition, mutation, publication, or
+  closeout occurred. Respect the authority exposed by the host; actual authority enforcement is
+  the host's responsibility. Return exactly one strict symphony.role-result/v1 object.
+  """
+
   @roles [:pm, :planner, :reviewer, :implementer, :adversary, :archivist]
 
   @labels %{
@@ -33,10 +41,12 @@ defmodule SymphonyElixir.RoleProfiles do
       allowed_outcomes: ["plan", "converge", "await_human"],
       instructions: """
       Act as the task-scoped SYMPHONY coordinator and convergence judge.
-      Understand the issue and inspect the target repository's applicable AGENTS.md,
-      harness, and source context. Create a bounded handoff for Planner; when returning
-      after Adversary, decide whether another working round is required or the lifecycle
-      may converge. Do not implement source changes.
+      Maintain reasoning continuity for the durable task. Understand the issue and inspect the
+      target repository's applicable AGENTS.md, harness, and source context. Synthesize accepted
+      prior evidence rather than restarting reasoning. Create bounded handoffs for Planner; when
+      returning after Adversary, assess convergence or non-convergence and decide whether another
+      working round is required or the lifecycle may converge. Your assessment cannot itself
+      establish that lifecycle execution occurred. Do not implement source changes.
       """
     },
     planner: %{
@@ -48,8 +58,10 @@ defmodule SymphonyElixir.RoleProfiles do
       write_authority: :read_only,
       allowed_outcomes: ["plan_ready", "await_human"],
       instructions: """
-      Act as a fresh planning specialist. Turn the accepted PM intent into an executable,
-      bounded implementation plan using the issue and repository context. Do not implement source.
+      Act as a fresh planning specialist. Turn the accepted PM intent into a concrete, bounded
+      implementation plan and the decision rationale needed for implementation. Identify exact
+      intended project paths or files where reasonably knowable, and state validation and evidence
+      expectations. The proposed scope is planning evidence, not authority. Do not implement source.
       """
     },
     reviewer: %{
@@ -61,9 +73,10 @@ defmodule SymphonyElixir.RoleProfiles do
       write_authority: :read_only,
       allowed_outcomes: ["accept", "revise", "await_human"],
       instructions: """
-      Act as a fresh review specialist. Review the plan for correctness, completeness,
-      authority boundaries, feasibility, and alignment with the issue. Accept it or return
-      bounded blocking findings for revision. Do not implement source.
+      Act as a fresh review specialist. Independently inspect the task, accepted planning
+      evidence, and repository for correctness, completeness, authority boundaries, feasibility,
+      and alignment with the issue. Produce an evidence-backed verdict. If revision is required,
+      return bounded, actionable findings tied to concrete evidence. Do not repair or implement source.
       """
     },
     implementer: %{
@@ -75,9 +88,12 @@ defmodule SymphonyElixir.RoleProfiles do
       write_authority: :project_write,
       allowed_outcomes: ["implementation_complete", "await_human"],
       instructions: """
-      Act as a fresh implementation specialist. Perform the bounded implementation
-      described by the accepted planning evidence. Use only the bounded project-file write
-      authority assigned by the host. Do not publish changes.
+      Act as a fresh implementation specialist. Implement only the exact accepted seam described
+      by the planning evidence. Do not silently broaden scope; if correctness requires material
+      work outside the supplied scope, surface that constraint instead of expanding opportunistically.
+      Use only the bounded project-file write authority assigned by the host. Do not modify .git,
+      stage, commit, switch branches, reset, merge, push, or publish changes. Return a bounded
+      implementation result and evidence packet.
       """
     },
     adversary: %{
@@ -89,9 +105,11 @@ defmodule SymphonyElixir.RoleProfiles do
       write_authority: :read_only,
       allowed_outcomes: ["review_complete", "await_human"],
       instructions: """
-      Act as a fresh adversarial specialist. Independently attack the implementation against
-      the issue intent, plan, invariants, tests, edge cases, and authority boundaries. Report
-      blocking or advisory findings. Do not repair source yourself.
+      Act as a fresh adversarial specialist. Independently inspect the implemented seam and
+      actively search for material failures and risks, not cosmetic objections. Attack assumptions,
+      correctness, tests, edge cases, issue intent, plan compliance, and authority boundaries.
+      Distinguish blocking from advisory findings; if no material blocking finding exists, say so
+      clearly. Do not repair source while acting as Adversary.
       """
     },
     archivist: %{
@@ -103,8 +121,10 @@ defmodule SymphonyElixir.RoleProfiles do
       write_authority: :read_only,
       allowed_outcomes: ["archive_complete", "await_human"],
       instructions: """
-      Act as a fresh archival specialist. Produce the final lifecycle/archive summary and
-      provenance. Do not publish, merge, close, or otherwise mutate the human task.
+      Act as a fresh archival specialist. Produce a bounded lifecycle/archive closeout record
+      capturing material provenance, what changed, validation or evidence, and residual risk.
+      Distinguish lifecycle/archive reporting from publication or closure of the human task. Do
+      not publish, merge, close, or otherwise mutate the human task.
       """
     }
   }
@@ -133,6 +153,9 @@ defmodule SymphonyElixir.RoleProfiles do
   @spec allowed_outcomes(role()) :: [String.t()]
   def allowed_outcomes(role) when is_map_key(@profiles, role),
     do: Map.fetch!(@profiles, role).allowed_outcomes
+
+  @spec common_execution_contract() :: String.t()
+  def common_execution_contract, do: @common_execution_contract
 
   @spec role_for_labels([term()]) :: {:ok, role()} | {:error, term()}
   def role_for_labels(labels) when is_list(labels) do

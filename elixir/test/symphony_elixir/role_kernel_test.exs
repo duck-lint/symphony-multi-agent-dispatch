@@ -71,6 +71,42 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert RoleProfiles.result_contract_instructions() =~ "Do not emit next_role"
   end
 
+  test "role prompts share the evidence contract and retain distinct behavior" do
+    issue = %Issue{identifier: "T-1", title: "Profile reconciliation"}
+
+    distinctive_behavior = %{
+      pm: "Maintain reasoning continuity",
+      planner: "decision rationale needed for implementation",
+      reviewer: "evidence-backed verdict",
+      implementer: "Implement only the exact accepted seam",
+      adversary: "material failures and risks, not cosmetic objections",
+      archivist: "material provenance, what changed, validation or evidence, and residual risk"
+    }
+
+    for role <- RoleProfiles.roles() do
+      prompt = PromptBuilder.build_prompt(issue, role)
+
+      assert prompt =~ "You are executing the SYMPHONY role #{RoleProfiles.role_name(role)}."
+      assert prompt =~ "Stay within the task, handoff, and scope supplied by the host."
+      assert prompt =~ "Do not choose or emit next_role."
+      assert prompt =~ "Return exactly one strict symphony.role-result/v1 object."
+      assert prompt =~ distinctive_behavior[role]
+      refute prompt =~ "Pilot"
+    end
+
+    implementer_prompt = PromptBuilder.build_prompt(issue, :implementer)
+    assert implementer_prompt =~ "Do not modify .git"
+    assert implementer_prompt =~ "stage, commit"
+    assert implementer_prompt =~ "push, or publish"
+
+    for role <- [:pm, :planner, :reviewer, :adversary, :archivist] do
+      refute RoleProfiles.profile!(role).instructions =~ "commit"
+      assert RoleProfiles.profile!(role).write_authority == :read_only
+      assert RoleProfiles.profile!(role).freshness == :fresh
+      assert RoleProfiles.profile!(role).thread_policy == :fresh
+    end
+  end
+
   test "legal lifecycle transitions are host-owned" do
     assert Lifecycle.transition(:pm, :plan, %{pm_phase: :initial}) == {:ok, :planner}
     assert Lifecycle.transition(:pm, "plan", %{pm_phase: :returning}) == {:ok, :planner}
