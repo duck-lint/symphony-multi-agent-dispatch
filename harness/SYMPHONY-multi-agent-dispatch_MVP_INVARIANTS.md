@@ -13,9 +13,9 @@ SYMPHONY succeeds when a task can autonomously move through planning, review, im
 
 The control-plane substrate is replaceable. For MVP, prefer the path that preserves the most proven upstream Symphony behavior and reaches this lifecycle with the least new machinery.
 
-SYMPHONY is reusable across arbitrary target repositories without source-code modification. Each runtime instance is project-scoped through that target project's project-local `instance_config.yml`; multiple independent project-scoped instances may run concurrently. MVP does not require a single orchestrator to multiplex multiple target projects.
+SYMPHONY is reusable across arbitrary target repositories without source-code modification. Each runtime instance is project-scoped through that target project's project-local `.symphony/instance_config.yml`; multiple independent project-scoped instances may run concurrently. MVP does not require a single orchestrator to multiplex multiple target projects.
 
-`instance_config.yml` binds/configures one project-scoped runtime instance only. It does not define the lifecycle, the PM profile, role prompts, or lifecycle authority. The shared multi-role lifecycle belongs to SYMPHONY and is structurally enforced by host code. Dispatched agents obtain project-specific semantic context from the target repository's applicable `AGENTS.md`, harness, and source context; that domain context is not orchestrator-owned.
+`.symphony/instance_config.yml` binds/configures one project-scoped runtime instance only. It does not define the lifecycle, the PM profile, role prompts, or lifecycle authority. The shared multi-role lifecycle belongs to SYMPHONY and is structurally enforced by host code. Dispatched agents obtain project-specific semantic context from the target repository's applicable `AGENTS.md`, harness, and source context; that domain context is not orchestrator-owned.
 
 ## 2. Lifecycle in stock-Symphony terms
 
@@ -58,7 +58,7 @@ Every specialist execution is fresh. The PM is the only role with task-scoped re
 
 There is no Architect role.
 
-Project-local `instance_config.yml` configures a project-scoped Symphony instance; it is not itself the lifecycle, PM profile, role prompt, or lifecycle authority. Host lifecycle code selects and dispatches PM and specialist role profiles.
+Project-local `.symphony/instance_config.yml` configures a project-scoped Symphony instance; it is not itself the lifecycle, PM profile, role prompt, or lifecycle authority. Host lifecycle code selects and dispatches PM and specialist role profiles.
 
 ## 3. Required differences from upstream Symphony
 
@@ -171,7 +171,7 @@ Intent:
 - do **not** reinstall or wipe the whole WSL distro merely to remove SYMPHONY;
 - preserve unrelated WSL state, Codex installation/auth, Git/user configuration, and unrelated projects/tools.
 
-Before deletion, produce an explicit manifest of Symphony-specific WSL paths/state to remove. After reset, reinstall only the minimal adapter/supervisor bridge actually required by the new instance_config.
+Before deletion, produce an explicit manifest of Symphony-specific WSL paths/state to remove. After reset, reinstall only the minimal adapter/supervisor bridge actually required by the new target `.symphony/instance_config`.
 
 There is no migration/backward-compatibility requirement for abandoned SYMPHONY state.
 
