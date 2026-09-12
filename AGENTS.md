@@ -70,18 +70,17 @@ Before changing an upstream seam, ask:
 
 If not, leave it alone unless required for safety.
 
-## N-project requirement
+## Project-scoped deployment model
 
-SYMPHONY must not structurally privilege one target repository.
+SYMPHONY is one reusable orchestration implementation that can be used across arbitrary target repositories without source-code modification.
 
-Target-project identity, repository bootstrap, instance_config/harness inputs, and workspace policy must be project-scoped configuration rather than hard-coded assumptions.
+Each running Symphony instance is scoped to one target project through that project's workflow configuration. A target repository may carry project-local Symphony configuration such as `.symphony/WORKFLOW.md`.
 
-**The exact N-project hosting model is not yet frozen.** In particular, do not yet assume either:
+Multiple project-scoped Symphony instances may run concurrently. They remain independent scheduling domains with separate tracker scopes, claim maps, workspaces, and runtime state.
 
-- one generalized orchestrator multiplexing every project; or
-- multiple project-scoped orchestrators supervised by one host.
+MVP does **not** require one orchestrator to multiplex multiple target projects internally, a central project registry, or a scheduler-of-schedulers.
 
-That is a semantic/architecture decision to be made before implementation.
+Project onboarding should be configuration/bootstrap work, not a new source-code integration.
 
 ## GitHub lifecycle direction
 
@@ -106,7 +105,7 @@ The adapter is **developer/tooling infrastructure only**. It is not lifecycle au
 
 Do not respond to the known direct-WSL bug by reinstalling/rebuilding WSL or redesigning the product.
 
-There must be one authoritative SYMPHONY source checkout. WSL may contain build/runtime state and per-issue target workspaces, but not a second independently authoritative SYMPHONY source/deployment clone.
+There must be one authoritative SYMPHONY source checkout. WSL may contain an installed/built Symphony runtime, logs, caches, and project/issue workspaces, but not a second independently authoritative SYMPHONY source repository.
 
 Old SYMPHONY-specific WSL state may be removed only after producing an explicit deletion manifest. Preserve unrelated WSL state, Codex auth/install, Git config, and unrelated projects/tools.
 
@@ -128,7 +127,7 @@ Pay special attention to hidden architectural assumptions in apparently operatio
 - Prefer narrow extensions over rewrites.
 - Do not import scheduling/control-plane code from parked custom Pilot/Runtime branches.
 - Do not preserve legacy behavior for compatibility's sake; this product has not launched.
-- Do not introduce SQLite, a second scheduler, a second Symphony daemon, publication automation, or generalized abstractions without explicit authority.
+- Do not introduce SQLite, a scheduler-of-schedulers, centralized multi-project control plane, publication automation, or internal multi-project multiplexing without explicit authority. Independent project-scoped runtime instances are allowed.
 - Do not perform unrelated refactors.
 - Do not use destructive Git operations (`reset`, `clean`, force push, ref rewrites, destructive checkout) without explicit human approval and stated consequences.
 - Do not ask the human to manually inspect giant diffs or ferry routine prompts between agents.

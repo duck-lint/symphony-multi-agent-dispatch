@@ -13,7 +13,7 @@ SYMPHONY succeeds when a task can autonomously move through planning, review, im
 
 The control-plane substrate is replaceable. For MVP, prefer the path that preserves the most proven upstream Symphony behavior and reaches this lifecycle with the least new machinery.
 
-SYMPHONY is project-agnostic orchestration. Target-project identity and bootstrap policy are selected per task/project configuration; no single target repository is structurally privileged.
+SYMPHONY is reusable across arbitrary target repositories without source-code modification. Each runtime instance is project-scoped through that target project's workflow configuration; multiple independent project-scoped instances may run concurrently. MVP does not require a single orchestrator to multiplex multiple target projects.
 
 ## 2. Lifecycle in stock-Symphony terms
 
@@ -55,6 +55,8 @@ Unless explicitly changed later, retain the current benchmark bounds:
 Every specialist execution is fresh. The PM is the only role with task-scoped reasoning continuity across returns to PM.
 
 There is no Architect role.
+
+Project-local `instance_config.yml` configures a project-scoped Symphony instance; it is not itself the PM role or the lifecycle authority. Host lifecycle code selects and dispatches PM and specialist role profiles.
 
 ## 3. Required differences from upstream Symphony
 
@@ -144,7 +146,7 @@ The rebuild should try to leave these upstream Symphony surfaces alone:
 - Codex App Server transport where role semantics do not require changes;
 - observability/dashboard foundations.
 
-A second Symphony process is not part of the MVP unless later analysis proves it necessary. One process/claim map avoids creating a new ownership-transfer protocol between PM and specialists.
+Within one project/workflow scope, one Symphony runtime and one claim map own that issue population. Independent runtime instances for different target projects are allowed and may run concurrently. Two runtimes must not independently schedule the same project/issue population unless a later design explicitly introduces shared ownership semantics.
 
 ## 5. WSL / tooling invariant
 
