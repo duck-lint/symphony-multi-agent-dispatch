@@ -1758,37 +1758,7 @@ defmodule SymphonyElixir.AppServerTest do
     trace_path = Path.join(test_root, "requests.log") |> String.replace("\\", "/")
     File.mkdir_p!(workspace)
 
-    thread_start_case =
-      case mode do
-        :fresh ->
-          """
-          3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-fresh"}}}' ;;
-          4)
-            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-fresh"}}}'
-            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
-            printf '%s\\n' '{"method":"turn/completed"}'
-            exit 0
-            ;;
-          """
-
-        :reuse ->
-          """
-          3)
-            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-existing"}}}'
-            printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
-            printf '%s\\n' '{"method":"turn/completed"}'
-            exit 0
-            ;;
-          """
-
-        :reuse_failure ->
-          """
-          3)
-            printf '%s\\n' '{"id":3,"error":{"message":"thread not found"}}'
-            exit 0
-            ;;
-          """
-      end
+    thread_start_case = thread_selection_script(mode)
 
     File.write!(codex_binary, """
     #!/bin/sh
@@ -1849,5 +1819,37 @@ defmodule SymphonyElixir.AppServerTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  defp thread_selection_script(:fresh) do
+    """
+    3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-fresh"}}}' ;;
+    4)
+      printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-fresh"}}}'
+      printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
+      printf '%s\\n' '{"method":"turn/completed"}'
+      exit 0
+      ;;
+    """
+  end
+
+  defp thread_selection_script(:reuse) do
+    """
+    3)
+      printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-existing"}}}'
+      printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
+      printf '%s\\n' '{"method":"turn/completed"}'
+      exit 0
+      ;;
+    """
+  end
+
+  defp thread_selection_script(:reuse_failure) do
+    """
+    3)
+      printf '%s\\n' '{"id":3,"error":{"message":"thread not found"}}'
+      exit 0
+      ;;
+    """
   end
 end

@@ -11,7 +11,6 @@ defmodule SymphonyElixir.Orchestrator do
     AgentRunner,
     Config,
     LifecycleCoordinator,
-    RoleProfiles,
     RoleRouter,
     StatusDashboard,
     Tracker,
@@ -258,6 +257,10 @@ defmodule SymphonyElixir.Orchestrator do
     handle_agent_down_after_failure_check(:normal, state, issue_id, running_entry, session_id)
   end
 
+  defp handle_agent_down(reason, state, issue_id, running_entry, session_id) do
+    handle_agent_down_after_failure_check(reason, state, issue_id, running_entry, session_id)
+  end
+
   defp commit_completed_role(state, issue_id, running_entry, role, result) do
     case LifecycleCoordinator.commit_role_result(running_entry.issue, role, result) do
       {:ok, transition} ->
@@ -283,27 +286,31 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp handle_agent_down(reason, state, issue_id, running_entry, session_id) do
-    handle_agent_down_after_failure_check(reason, state, issue_id, running_entry, session_id)
-  end
-
   defp handle_agent_down_after_failure_check(reason, state, issue_id, running_entry, session_id) do
     case Map.get(running_entry, :role_execution_failure) do
       %{kind: :pm_continuity, reason: continuity_reason} ->
         block_pm_continuity(state, issue_id, running_entry, continuity_reason)
 
       _ ->
-        case Map.get(running_entry, :role_execution) do
-          %{role: role, result: result} when is_map(result) ->
-            commit_completed_role(state, issue_id, running_entry, role, result)
+        handle_agent_down_without_continuity_failure(reason, state, issue_id, running_entry, session_id)
+    end
+  end
 
-          _ ->
-            if input_required_blocker?(running_entry) do
-              block_input_required_agent_down(state, issue_id, running_entry, session_id, reason)
-            else
-              retry_agent_down(state, issue_id, running_entry, session_id, reason)
-            end
-        end
+  defp handle_agent_down_without_continuity_failure(reason, state, issue_id, running_entry, session_id) do
+    case Map.get(running_entry, :role_execution) do
+      %{role: role, result: result} when is_map(result) ->
+        commit_completed_role(state, issue_id, running_entry, role, result)
+
+      _ ->
+        handle_agent_down_without_role_result(reason, state, issue_id, running_entry, session_id)
+    end
+  end
+
+  defp handle_agent_down_without_role_result(reason, state, issue_id, running_entry, session_id) do
+    if input_required_blocker?(running_entry) do
+      block_input_required_agent_down(state, issue_id, running_entry, session_id, reason)
+    else
+      retry_agent_down(state, issue_id, running_entry, session_id, reason)
     end
   end
 
@@ -791,8 +798,6 @@ defmodule SymphonyElixir.Orchestrator do
         "mcpServer/elicitation/request"
   end
 
-  defp input_required_blocker?(_running_entry), do: false
-
   defp input_required_completion_outcome(completion) when is_map(completion) do
     outcome = Map.get(completion, :outcome) || Map.get(completion, "outcome")
     normalize_input_required_outcome(outcome)
@@ -821,8 +826,6 @@ defmodule SymphonyElixir.Orchestrator do
       codex_message_blocker_error(Map.get(running_entry, :last_codex_message)) ||
       fallback
   end
-
-  defp blocker_error(_running_entry, fallback), do: fallback
 
   defp codex_event_blocker_error(:turn_input_required), do: "codex turn requires operator input"
   defp codex_event_blocker_error(:approval_required), do: "codex turn requires approval"

@@ -29,6 +29,25 @@ defmodule SymphonyElixir.RoleRuntimePolicyTest do
     assert policy.git_metadata_protection == :required
   end
 
+  test "policy validation rejects tampering and malformed inputs" do
+    workspace = "/tmp/issue-workspace"
+    assert {:ok, policy} = RoleRuntimePolicy.for_role(:planner, workspace)
+
+    assert {:error, :role_runtime_policy_tampered} =
+             RoleRuntimePolicy.validate(:planner, Map.put(policy, :network_access, true), workspace)
+
+    assert {:error, {:role_runtime_policy, :invalid_workspace}} =
+             RoleRuntimePolicy.validate(:planner, policy, "  ")
+
+    assert {:error, :invalid_role_runtime_policy} =
+             RoleRuntimePolicy.validate(:planner, :not_a_policy, workspace)
+  end
+
+  test "policy construction rejects non-string workspace paths" do
+    assert {:error, {:role_runtime_policy, :invalid_workspace}} =
+             RoleRuntimePolicy.for_role(:implementer, nil)
+  end
+
   test "configured sandbox and network settings cannot widen a role policy" do
     assert {:ok, policy} = RoleRuntimePolicy.for_role(:planner, "/tmp/issue-workspace")
 

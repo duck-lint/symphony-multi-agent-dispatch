@@ -9,21 +9,26 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Codex.AppServer
       alias SymphonyElixir.Config
       alias SymphonyElixir.HttpServer
+      alias SymphonyElixir.InstanceConfig
+      alias SymphonyElixir.InstanceConfigStore
+      alias SymphonyElixir.Lifecycle
       alias SymphonyElixir.Linear.Client
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
-      alias SymphonyElixir.Lifecycle
       alias SymphonyElixir.RoleProfiles
       alias SymphonyElixir.RoleRouter
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
       alias SymphonyElixir.Tracker.Issue
-      alias SymphonyElixir.InstanceConfig
-      alias SymphonyElixir.InstanceConfigStore
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_instance_config_file!: 1, write_instance_config_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_instance_config_file!: 1,
+          write_instance_config_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0
+        ]
 
       setup do
         instance_config_root =

@@ -187,7 +187,6 @@ defmodule SymphonyElixir.GitHub.Client do
     else
       nil -> {:error, :github_unknown_payload}
       {:error, _reason} = error -> error
-      _ -> {:error, :github_unknown_payload}
     end
   end
 

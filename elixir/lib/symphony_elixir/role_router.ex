@@ -12,8 +12,9 @@ defmodule SymphonyElixir.RoleRouter do
 
   @spec profile_for_issue(Issue.t()) :: {:ok, map()} | {:error, term()}
   def profile_for_issue(%Issue{} = issue) do
-    with {:ok, role} <- role_for_issue(issue), {:ok, profile} <- RoleProfiles.profile(role) do
-      {:ok, profile}
+    case role_for_issue(issue) do
+      {:ok, role} -> RoleProfiles.profile(role)
+      error -> error
     end
   end
 

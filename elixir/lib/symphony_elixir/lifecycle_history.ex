@@ -52,25 +52,26 @@ defmodule SymphonyElixir.LifecycleHistory do
   @spec parse_comment(term()) :: :ignore | {:ok, event()} | {:error, term()}
   def parse_comment(comment) do
     case comment_body(comment) do
-      body when is_binary(body) ->
-        case Regex.run(
-               ~r/\A<!--\s*symphony\.lifecycle\/v1\s*\r?\n(?<payload>\{.*\})\r?\n-->(?:\r?\n(?<summary>.*))?\z/s,
-               body,
-               capture: :all_names
-             ) do
-          [payload, summary] ->
-            decode_event(payload, summary)
+      body when is_binary(body) -> parse_comment_body(body)
+      _ -> :ignore
+    end
+  end
 
-          nil ->
-            if String.starts_with?(String.trim_leading(body), "<!-- symphony.lifecycle/v1") do
-              {:error, :malformed_lifecycle_comment}
-            else
-              :ignore
-            end
+  defp parse_comment_body(body) do
+    case Regex.run(
+           ~r/\A<!--\s*symphony\.lifecycle\/v1\s*\r?\n(?<payload>\{.*\})\r?\n-->(?:\r?\n(?<summary>.*))?\z/s,
+           body,
+           capture: :all_names
+         ) do
+      [payload, summary] ->
+        decode_event(payload, summary)
+
+      nil ->
+        if String.starts_with?(String.trim_leading(body), "<!-- symphony.lifecycle/v1") do
+          {:error, :malformed_lifecycle_comment}
+        else
+          :ignore
         end
-
-      _ ->
-        :ignore
     end
   end
 
@@ -90,14 +91,14 @@ defmodule SymphonyElixir.LifecycleHistory do
     end)
   end
 
+  def project(_events), do: {:error, :lifecycle_events_not_a_list}
+
   defp apply_new_event(state, event) do
     case apply_event(state, event) do
       {:ok, next_state} -> {:cont, {:ok, next_state}}
       {:error, reason} -> {:halt, {:error, reason}}
     end
   end
-
-  def project(_events), do: {:error, :lifecycle_events_not_a_list}
 
   @spec from_comments([term()]) :: {:ok, state()} | {:error, term()}
   def from_comments(comments) do
@@ -173,21 +174,22 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp comment_body(body) when is_binary(body), do: body
   defp comment_body(_comment), do: nil
 
+  @spec decode_event(String.t(), String.t() | nil) :: {:ok, event()} | {:error, term()}
   defp decode_event(payload, summary) do
     case Jason.decode(payload) do
-      {:ok, event} when is_map(event) ->
+      {:ok, event} ->
         with :ok <- validate_event(event) do
-          {:ok, Map.put(event, "_human_summary", String.trim(summary || ""))}
+          {:ok, Map.put(event, "_human_summary", human_summary(summary))}
         end
-
-      {:ok, _event} ->
-        {:error, :lifecycle_event_not_a_map}
 
       {:error, reason} ->
         {:error, {:lifecycle_event_json_error, reason}}
     end
   end
 
+  defp human_summary(summary), do: summary |> to_string() |> String.trim()
+
+  @spec validate_event(map()) :: :ok | {:error, term()}
   defp validate_event(event) do
     with :ok <- require_string(event, "schema"),
          :ok <- require_string(event, "kind"),
@@ -222,13 +224,10 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   defp validate_kind_fields(%{"kind" => kind} = event) when kind in ["transition", "terminal", "escalation", "blocked"] do
     with :ok <- validate_common_event_fields(event),
-         :ok <- validate_event_lists(event),
-         :ok <- validate_event_numbers(event) do
-      :ok
+         :ok <- validate_event_lists(event) do
+      validate_event_numbers(event)
     end
   end
-
-  defp validate_kind_fields(_event), do: {:error, :invalid_lifecycle_event}
 
   defp validate_common_event_fields(event) do
     required =
@@ -249,9 +248,8 @@ defmodule SymphonyElixir.LifecycleHistory do
   end
 
   defp validate_event_lists(event) do
-    with :ok <- validate_string_list(event["evidence"], :evidence),
-         :ok <- validate_findings(event["findings"]) do
-      :ok
+    with :ok <- validate_string_list(event["evidence"], :evidence) do
+      validate_findings(event["findings"])
     end
   end
 
@@ -340,7 +338,6 @@ defmodule SymphonyElixir.LifecycleHistory do
       next_state = advance_state(state, from_role, event["outcome"], event)
       {:ok, %{next_state | events: state.events ++ [event]}}
     else
-      false -> {:error, :lifecycle_from_role_mismatch}
       {:error, _reason} = error -> error
     end
   end
@@ -366,7 +363,6 @@ defmodule SymphonyElixir.LifecycleHistory do
         {:error, {:invalid_lifecycle_terminal, terminal}}
       end
     else
-      false -> {:error, :lifecycle_from_role_mismatch}
       {:error, _reason} = error -> error
     end
   end
@@ -387,7 +383,6 @@ defmodule SymphonyElixir.LifecycleHistory do
            events: state.events ++ [event]
        }}
     else
-      false -> {:error, :lifecycle_from_role_mismatch}
       {:error, _reason} = error -> error
       _ -> {:error, :invalid_lifecycle_escalation}
     end
@@ -398,7 +393,6 @@ defmodule SymphonyElixir.LifecycleHistory do
       case state.pm_phase do
         :initial -> %{round: 1, planning_attempt: 1}
         :returning -> %{round: state.round + 1, planning_attempt: 1}
-        _ -> %{round: -1, planning_attempt: -1}
       end
 
     compare_position(expected, round, attempt)
@@ -439,14 +433,8 @@ defmodule SymphonyElixir.LifecycleHistory do
     end
   end
 
-  defp validate_target(target, destination) do
-    expected =
-      case destination do
-        role when role in @roles -> RoleProfiles.role_name(role)
-        :await_human -> "AWAITING_HUMAN"
-        :lifecycle_complete -> "LIFECYCLE_COMPLETE"
-      end
-
+  defp validate_target(target, destination) when destination in @roles do
+    expected = RoleProfiles.role_name(destination)
     if target == expected, do: :ok, else: {:error, {:invalid_lifecycle_target, expected, target}}
   end
 
@@ -471,6 +459,9 @@ defmodule SymphonyElixir.LifecycleHistory do
     }
   end
 
+  defp advance_state(state, :pm, "converge", event),
+    do: %{state | current_role: :archivist, transition_id: event["transition_id"]}
+
   defp advance_state(state, :planner, "plan_ready", event),
     do: %{state | current_role: :reviewer, transition_id: event["transition_id"]}
 
@@ -483,11 +474,15 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp advance_state(state, :implementer, "implementation_complete", event),
     do: %{state | current_role: :adversary, transition_id: event["transition_id"]}
 
-  defp advance_state(state, :adversary, "review_complete", event),
-    do: %{state | current_role: :pm, pm_phase: :returning, completed_working_round?: true, preceding_adversary_findings: event["findings"], transition_id: event["transition_id"]}
-
-  defp advance_state(state, _role, _outcome, event),
-    do: %{state | transition_id: event["transition_id"]}
+  defp advance_state(state, :adversary, "review_complete", event) do
+    Map.merge(state, %{
+      current_role: :pm,
+      pm_phase: :returning,
+      completed_working_round?: true,
+      preceding_adversary_findings: event["findings"],
+      transition_id: event["transition_id"]
+    })
+  end
 
   defp role_from_name(name) do
     case Map.fetch(@role_names, name) do

@@ -569,117 +569,170 @@ defmodule SymphonyElixir.Codex.AppServer do
     payload_string = to_string(data)
 
     case Jason.decode(payload_string) do
-      {:ok, %{"method" => "turn/completed"} = payload} ->
-        emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
-
-        case final_agent_message(completed_agent_messages) do
-          {:ok, assistant_text} -> {:ok, assistant_text}
-          :error -> {:error, :turn_completed_without_agent_message}
-        end
-
-      {:ok, %{"method" => "turn/failed", "params" => _} = payload} ->
-        emit_turn_event(
-          on_message,
-          :turn_failed,
-          payload,
-          payload_string,
-          port,
-          Map.get(payload, "params")
-        )
-
-        {:error, {:turn_failed, Map.get(payload, "params")}}
-
-      {:ok, %{"method" => "turn/cancelled", "params" => _} = payload} ->
-        emit_turn_event(
-          on_message,
-          :turn_cancelled,
-          payload,
-          payload_string,
-          port,
-          Map.get(payload, "params")
-        )
-
-        {:error, {:turn_cancelled, Map.get(payload, "params")}}
-
-      {:ok, %{"method" => method} = payload}
-      when is_binary(method) ->
-        if method == "item/completed" do
-          emit_message(
-            on_message,
-            :notification,
-            %{payload: payload, raw: payload_string},
-            metadata_from_message(port, payload)
-          )
-
-          receive_loop(
-            port,
-            on_message,
-            timeout_ms,
-            "",
-            tool_executor,
-            auto_approve_requests,
-            collect_agent_message(completed_agent_messages, payload)
-          )
-        else
-          handle_turn_method(
-            port,
-            on_message,
-            payload,
-            payload_string,
-            method,
-            timeout_ms,
-            tool_executor,
-            auto_approve_requests,
-            completed_agent_messages
-          )
-        end
-
       {:ok, payload} ->
-        emit_message(
-          on_message,
-          :other_message,
-          %{
-            payload: payload,
-            raw: payload_string
-          },
-          metadata_from_message(port, payload)
-        )
-
-        receive_loop(
+        handle_decoded_message(
           port,
           on_message,
+          payload,
+          payload_string,
           timeout_ms,
-          "",
           tool_executor,
           auto_approve_requests,
           completed_agent_messages
         )
 
       {:error, _reason} ->
-        log_non_json_stream_line(payload_string, "turn stream")
-
-        if protocol_message_candidate?(payload_string) do
-          emit_message(
-            on_message,
-            :malformed,
-            %{
-              payload: payload_string,
-              raw: payload_string
-            },
-            metadata_from_message(port, %{raw: payload_string})
-          )
-        end
-
-        receive_loop(
+        handle_malformed_message(
           port,
           on_message,
+          payload_string,
           timeout_ms,
-          "",
           tool_executor,
           auto_approve_requests,
           completed_agent_messages
         )
     end
+  end
+
+  defp handle_decoded_message(
+         port,
+         on_message,
+         %{"method" => "turn/completed"} = payload,
+         payload_string,
+         _timeout_ms,
+         _tool_executor,
+         _auto_approve_requests,
+         completed_agent_messages
+       ) do
+    emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
+
+    case final_agent_message(completed_agent_messages) do
+      {:ok, assistant_text} -> {:ok, assistant_text}
+      :error -> {:error, :turn_completed_without_agent_message}
+    end
+  end
+
+  defp handle_decoded_message(
+         port,
+         on_message,
+         %{"method" => method} = payload,
+         payload_string,
+         _timeout_ms,
+         _tool_executor,
+         _auto_approve_requests,
+         _completed_agent_messages
+       )
+       when method in ["turn/failed", "turn/cancelled"] do
+    event = if method == "turn/failed", do: :turn_failed, else: :turn_cancelled
+    reason = if method == "turn/failed", do: :turn_failed, else: :turn_cancelled
+    details = Map.get(payload, "params")
+    emit_turn_event(on_message, event, payload, payload_string, port, details)
+    {:error, {reason, details}}
+  end
+
+  defp handle_decoded_message(
+         port,
+         on_message,
+         %{"method" => method} = payload,
+         payload_string,
+         timeout_ms,
+         tool_executor,
+         auto_approve_requests,
+         completed_agent_messages
+       )
+       when is_binary(method) do
+    if method == "item/completed" do
+      emit_message(
+        on_message,
+        :notification,
+        %{payload: payload, raw: payload_string},
+        metadata_from_message(port, payload)
+      )
+
+      continue_receiving(
+        port,
+        on_message,
+        timeout_ms,
+        tool_executor,
+        auto_approve_requests,
+        collect_agent_message(completed_agent_messages, payload)
+      )
+    else
+      handle_turn_method(
+        port,
+        on_message,
+        payload,
+        payload_string,
+        method,
+        %{
+          timeout_ms: timeout_ms,
+          tool_executor: tool_executor,
+          auto_approve_requests: auto_approve_requests,
+          completed_agent_messages: completed_agent_messages
+        }
+      )
+    end
+  end
+
+  defp handle_decoded_message(
+         port,
+         on_message,
+         payload,
+         payload_string,
+         timeout_ms,
+         tool_executor,
+         auto_approve_requests,
+         completed_agent_messages
+       ) do
+    emit_message(
+      on_message,
+      :other_message,
+      %{payload: payload, raw: payload_string},
+      metadata_from_message(port, payload)
+    )
+
+    continue_receiving(
+      port,
+      on_message,
+      timeout_ms,
+      tool_executor,
+      auto_approve_requests,
+      completed_agent_messages
+    )
+  end
+
+  defp handle_malformed_message(
+         port,
+         on_message,
+         payload_string,
+         timeout_ms,
+         tool_executor,
+         auto_approve_requests,
+         completed_agent_messages
+       ) do
+    log_non_json_stream_line(payload_string, "turn stream")
+
+    if protocol_message_candidate?(payload_string) do
+      emit_message(
+        on_message,
+        :malformed,
+        %{payload: payload_string, raw: payload_string},
+        metadata_from_message(port, %{raw: payload_string})
+      )
+    end
+
+    continue_receiving(
+      port,
+      on_message,
+      timeout_ms,
+      tool_executor,
+      auto_approve_requests,
+      completed_agent_messages
+    )
+  end
+
+  defp continue_receiving(port, on_message, timeout_ms, tool_executor, auto_approve_requests, messages) do
+    receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests, messages)
   end
 
   defp emit_turn_event(on_message, event, payload, payload_string, port, payload_details) do
@@ -695,17 +748,14 @@ defmodule SymphonyElixir.Codex.AppServer do
     )
   end
 
-  defp handle_turn_method(
-         port,
-         on_message,
-         payload,
-         payload_string,
-         method,
-         timeout_ms,
-         tool_executor,
-         auto_approve_requests,
-         completed_agent_messages
-       ) do
+  defp handle_turn_method(port, on_message, payload, payload_string, method, runtime) do
+    %{
+      timeout_ms: timeout_ms,
+      tool_executor: tool_executor,
+      auto_approve_requests: auto_approve_requests,
+      completed_agent_messages: completed_agent_messages
+    } = runtime
+
     metadata = metadata_from_message(port, payload)
 
     case maybe_handle_approval_request(
@@ -802,8 +852,6 @@ defmodule SymphonyElixir.Codex.AppServer do
       _ -> :error
     end
   end
-
-  defp final_agent_message(_messages), do: :error
 
   defp maybe_handle_approval_request(
          port,

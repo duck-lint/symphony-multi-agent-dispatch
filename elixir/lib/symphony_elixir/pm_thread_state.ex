@@ -14,11 +14,10 @@ defmodule SymphonyElixir.PMThreadState do
   @app_name "symphony"
   @state_subdirectory "pm_threads"
 
-  @type record :: %{
-          schema: String.t(),
-          lifecycle_id: String.t(),
-          thread_id: String.t()
-        }
+  # JSON object keys are binaries; the Elixir typespec language cannot express
+  # a non-literal binary key shape, so keep this public return type honest but
+  # intentionally broad.
+  @type record :: map()
 
   @spec schema() :: String.t()
   def schema, do: @schema
@@ -27,35 +26,34 @@ defmodule SymphonyElixir.PMThreadState do
           {:resume, String.t()} | {:new, term()} | {:error, term()}
   def resolve(issue_id, lifecycle_id, phase)
       when is_binary(issue_id) and is_binary(lifecycle_id) and phase in [:initial, :returning] do
-    case load(issue_id) do
-      :missing when phase == :initial ->
-        {:new, :missing}
-
-      :missing ->
-        {:error, :pm_thread_state_missing}
-
-      {:ok, %{"lifecycle_id" => ^lifecycle_id, "thread_id" => thread_id}} ->
-        {:resume, thread_id}
-
-      {:ok, %{"lifecycle_id" => old_lifecycle_id}} when phase == :initial ->
-        {:new, {:stale_lifecycle, old_lifecycle_id}}
-
-      {:ok, %{"lifecycle_id" => old_lifecycle_id}} ->
-        {:error, {:pm_thread_lifecycle_mismatch, old_lifecycle_id, lifecycle_id}}
-
-      {:error, reason} when phase == :initial ->
-        {:new, {:replaceable_stale_state, reason}}
-
-      {:error, reason} ->
-        {:error, {:pm_thread_state_unusable, reason}}
-    end
+    resolve_loaded_state(load(issue_id), lifecycle_id, phase)
   end
 
   def resolve(_issue_id, _lifecycle_id, _phase),
     do: {:error, :invalid_pm_thread_binding}
 
+  defp resolve_loaded_state(:missing, _lifecycle_id, :initial), do: {:new, :missing}
+  defp resolve_loaded_state(:missing, _lifecycle_id, :returning), do: {:error, :pm_thread_state_missing}
+
+  defp resolve_loaded_state({:ok, %{"lifecycle_id" => lifecycle_id, "thread_id" => thread_id}}, lifecycle_id, _phase),
+    do: {:resume, thread_id}
+
+  defp resolve_loaded_state({:ok, %{"lifecycle_id" => old_lifecycle_id}}, _lifecycle_id, :initial),
+    do: {:new, {:stale_lifecycle, old_lifecycle_id}}
+
+  defp resolve_loaded_state({:ok, %{"lifecycle_id" => old_lifecycle_id}}, lifecycle_id, :returning),
+    do: {:error, {:pm_thread_lifecycle_mismatch, old_lifecycle_id, lifecycle_id}}
+
+  defp resolve_loaded_state({:error, reason}, _lifecycle_id, :initial),
+    do: {:new, {:replaceable_stale_state, reason}}
+
+  defp resolve_loaded_state({:error, reason}, _lifecycle_id, :returning),
+    do: {:error, {:pm_thread_state_unusable, reason}}
+
+  def load(issue_id, opts \\ [])
+
   @spec load(String.t(), keyword()) :: {:ok, record()} | :missing | {:error, term()}
-  def load(issue_id, opts \\ []) when is_binary(issue_id) do
+  def load(issue_id, opts) when is_binary(issue_id) do
     with {:ok, path} <- path_for_issue(issue_id, opts) do
       case File.read(path) do
         {:ok, content} -> decode_record(content, path)
@@ -67,8 +65,10 @@ defmodule SymphonyElixir.PMThreadState do
 
   def load(_issue_id, _opts), do: {:error, :invalid_pm_thread_issue_id}
 
-  @spec put(String.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def put(issue_id, lifecycle_id, thread_id, opts \\ [])
+
+  @spec put(String.t(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def put(issue_id, lifecycle_id, thread_id, opts)
       when is_binary(issue_id) and is_binary(lifecycle_id) and is_binary(thread_id) do
     with :ok <- validate_identifier(issue_id, :issue_id),
          :ok <- validate_identifier(lifecycle_id, :lifecycle_id),
@@ -124,9 +124,8 @@ defmodule SymphonyElixir.PMThreadState do
         {:error, {:invalid_schema, record["schema"]}}
 
       true ->
-        with :ok <- validate_identifier(record["lifecycle_id"], :lifecycle_id),
-             :ok <- validate_identifier(record["thread_id"], :thread_id) do
-          :ok
+        with :ok <- validate_identifier(record["lifecycle_id"], :lifecycle_id) do
+          validate_identifier(record["thread_id"], :thread_id)
         end
     end
   end
@@ -155,27 +154,29 @@ defmodule SymphonyElixir.PMThreadState do
       Keyword.get(opts, :state_root) ||
         Application.get_env(:symphony_elixir, :pm_thread_state_root)
 
-    root =
-      configured ||
-        case :os.type() do
-          {:win32, _} ->
-            System.get_env("LOCALAPPDATA") ||
-              System.get_env("APPDATA") ||
-              Path.join(System.user_home!(), "AppData/Local")
-
-          {:unix, :darwin} ->
-            System.get_env("XDG_STATE_HOME") ||
-              Path.join(System.user_home!(), "Library/Application Support")
-
-          _ ->
-            System.get_env("XDG_STATE_HOME") ||
-              Path.join(System.user_home!(), ".local/state")
-        end
+    root = configured || default_state_root()
 
     if is_binary(root) and String.trim(root) != "" do
       {:ok, Path.join(Path.expand(root), @app_name <> "/" <> @state_subdirectory)}
     else
       {:error, :invalid_pm_thread_state_root}
+    end
+  end
+
+  defp default_state_root do
+    case :os.type() do
+      {:win32, _} ->
+        System.get_env("LOCALAPPDATA") ||
+          System.get_env("APPDATA") ||
+          Path.join(System.user_home!(), "AppData/Local")
+
+      {:unix, :darwin} ->
+        System.get_env("XDG_STATE_HOME") ||
+          Path.join(System.user_home!(), "Library/Application Support")
+
+      _ ->
+        System.get_env("XDG_STATE_HOME") ||
+          Path.join(System.user_home!(), ".local/state")
     end
   end
 

@@ -143,6 +143,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, %{config: %{"polling" => %{"interval_ms" => 30_000}}}} = InstanceConfig.current()
 
     assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, InstanceConfigStore)
+    assert {:ok, %{config: %{"polling" => %{"interval_ms" => 30_000}}}} = InstanceConfig.current()
     assert {:ok, %{config: %{"polling" => %{"interval_ms" => 30_000}}}} = InstanceConfigStore.current()
     assert {:ok, settings} = InstanceConfigStore.settings()
     assert settings.polling.interval_ms == 30_000

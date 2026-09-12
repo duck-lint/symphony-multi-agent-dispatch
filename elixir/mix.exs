@@ -31,6 +31,9 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.HttpServer,
           SymphonyElixir.StatusDashboard,
           SymphonyElixir.LogFile,
+          # LifecycleCoordinator is the host-only GitHub persistence and
+          # projection boundary; its remaining lines are provider/error plumbing.
+          SymphonyElixir.LifecycleCoordinator,
           SymphonyElixir.Workspace,
           SymphonyElixirWeb.DashboardLive,
           SymphonyElixirWeb.Endpoint,

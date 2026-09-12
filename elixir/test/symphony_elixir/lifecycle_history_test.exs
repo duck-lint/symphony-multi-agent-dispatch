@@ -30,6 +30,129 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
              ])
   end
 
+  test "parser and projection reject malformed input without inventing history" do
+    assert {:error, :lifecycle_comments_not_a_list} = LifecycleHistory.parse_comments(:not_a_list)
+    assert {:error, :lifecycle_events_not_a_list} = LifecycleHistory.project(:not_a_list)
+    assert :ignore = LifecycleHistory.parse_comment(%{body: 12})
+    assert :ignore = LifecycleHistory.parse_comment(:not_a_comment)
+
+    start = LifecycleHistory.start_event("life-parser")
+    comment = "<!-- symphony.lifecycle/v1\n#{Jason.encode!(start)}\n-->"
+
+    assert {:ok, %{"_human_summary" => ""}} = LifecycleHistory.parse_comment(comment)
+    assert {:ok, %{"_human_summary" => ""}} = LifecycleHistory.parse_comment(%{body: comment})
+    assert {:ok, %{"_human_summary" => ""}} = LifecycleHistory.parse_comment(%{body: comment})
+    assert {:error, :malformed_lifecycle_comment} = LifecycleHistory.parse_comment(%{body: comment <> " trailing"})
+
+    assert {:error, {:lifecycle_event_json_error, _}} =
+             LifecycleHistory.parse_comment("<!-- symphony.lifecycle/v1\n{bad}\n-->")
+
+    assert {:error, :lifecycle_event_without_start} =
+             LifecycleHistory.project([transition_event("life-parser", "PM", "plan", "PLANNER", 1, 1)])
+
+    assert {:error, :lifecycle_id_mismatch} =
+             LifecycleHistory.project([
+               LifecycleHistory.start_event("life-parser"),
+               transition_event("other-life", "PM", "plan", "PLANNER", 1, 1)
+             ])
+
+    assert {:error, :active_lifecycle_restarted} =
+             LifecycleHistory.project([
+               LifecycleHistory.start_event("life-parser"),
+               LifecycleHistory.start_event("other-life")
+             ])
+
+    assert {:error, :invalid_lifecycle_event} =
+             LifecycleHistory.project([
+               LifecycleHistory.start_event("life-parser"),
+               %{"schema" => LifecycleHistory.schema(), "kind" => "unknown", "lifecycle_id" => "life-parser"}
+             ])
+  end
+
+  test "event validation covers kind-specific fields, lists, findings, and positions" do
+    base = transition_event("life-validation", "PM", "plan", "PLANNER", 1, 1)
+
+    assert {:error, {:invalid_lifecycle_schema, "wrong/v1"}} = parse_event(Map.put(base, "schema", "wrong/v1"))
+    assert {:error, {:invalid_lifecycle_event_kind, "unknown"}} = parse_event(Map.put(base, "kind", "unknown"))
+    assert {:error, {:invalid_lifecycle_event_list, :evidence}} = parse_event(Map.put(base, "evidence", :bad))
+    assert {:error, :invalid_lifecycle_event_findings} = parse_event(Map.put(base, "findings", :bad))
+    assert {:error, :invalid_lifecycle_event_findings} = parse_event(Map.put(base, "findings", [%{"bad" => true}]))
+    assert {:error, :invalid_lifecycle_event_list} = parse_event(Map.put(base, "evidence", [""]))
+    assert {:error, :invalid_lifecycle_event_position} = parse_event(Map.put(base, "round", -1))
+
+    terminal = Map.merge(base, %{"kind" => "terminal", "to_role" => "NON_CONVERGED"})
+    escalation = Map.merge(base, %{"kind" => "escalation", "to_role" => "AWAITING_HUMAN", "outcome" => "await_human"})
+
+    blocked =
+      Map.take(base, ["schema", "kind", "lifecycle_id", "summary", "evidence", "findings"])
+      |> Map.put("kind", "blocked")
+
+    assert {:ok, _} = parse_event(terminal)
+    assert {:ok, _} = parse_event(escalation)
+    assert {:ok, _} = parse_event(blocked)
+
+    finding = %{"severity" => "advisory", "summary" => "valid", "evidence" => ["observed"]}
+    assert {:ok, _} = parse_event(Map.put(base, "findings", [finding]))
+    assert {:error, :invalid_lifecycle_event_findings} = parse_event(Map.put(base, "findings", [Map.put(finding, "summary", " ")]))
+  end
+
+  test "projection handles blocked, escalated, terminal, and converged lifecycles" do
+    lifecycle_id = "life-projection"
+    start = LifecycleHistory.start_event(lifecycle_id)
+
+    escalation =
+      transition_event(lifecycle_id, "PM", "await_human", "AWAITING_HUMAN", 0, 0)
+      |> Map.put("kind", "escalation")
+      |> Map.put("transition_id", LifecycleHistory.transition_id(lifecycle_id, 0, 0, :pm, "await_human"))
+
+    assert {:ok, %{active?: false, terminal: "awaiting-human"}} =
+             LifecycleHistory.project([start, escalation])
+
+    assert {:error, :lifecycle_from_role_mismatch} =
+             LifecycleHistory.project([start, Map.put(escalation, "from_role", "PLANNER")])
+
+    assert {:error, :invalid_lifecycle_escalation} =
+             LifecycleHistory.project([start, Map.put(escalation, "outcome", "plan")])
+
+    blocked =
+      Map.take(escalation, ["schema", "lifecycle_id", "summary", "evidence", "findings"])
+      |> Map.put("kind", "blocked")
+
+    assert {:ok, %{active?: false, terminal: "blocked"}} =
+             LifecycleHistory.project([start, blocked])
+
+    assert {:error, {:invalid_lifecycle_role, "NOPE"}} =
+             LifecycleHistory.project([start, Map.put(Map.put(escalation, "kind", "terminal"), "from_role", "NOPE")])
+
+    assert {:error, :invalid_lifecycle_terminal_transition} =
+             LifecycleHistory.project([
+               start,
+               Map.put(escalation, "kind", "terminal")
+             ])
+
+    wrong_position = transition_event(lifecycle_id, "PM", "plan", "PLANNER", 2, 1)
+
+    assert {:error, {:invalid_lifecycle_event_position, _, _}} =
+             LifecycleHistory.project([start, wrong_position])
+
+    converge_events = [
+      start,
+      transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1),
+      transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1),
+      transition_event(lifecycle_id, "REVIEWER", "accept", "IMPLEMENTER", 1, 1),
+      transition_event(lifecycle_id, "IMPLEMENTER", "implementation_complete", "ADVERSARY", 1, 1),
+      transition_event(lifecycle_id, "ADVERSARY", "review_complete", "PM", 1, 1),
+      transition_event(lifecycle_id, "PM", "converge", "ARCHIVIST", 1, 1),
+      terminal_event(lifecycle_id, "ARCHIVIST", "archive_complete", "LIFECYCLE_COMPLETE", 1, 1)
+    ]
+
+    assert {:ok, %{active?: false, terminal: "lifecycle_complete", current_role: :archivist}} =
+             LifecycleHistory.project(converge_events)
+
+    assert {:error, :lifecycle_event_after_terminal} =
+             LifecycleHistory.project(converge_events ++ [transition_event(lifecycle_id, "PM", "plan", "PLANNER", 2, 1)])
+  end
+
   test "transition ids use the durable lifecycle position" do
     assert LifecycleHistory.transition_id("life-1", 2, 3, :reviewer, "revise") ==
              "life-1:r2:p3:REVIEWER:revise"
@@ -48,6 +171,19 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
 
     assert {:error, {:conflicting_lifecycle_event, "life-1:r1:p1:PM:plan"}} =
              LifecycleHistory.project([start, transition, changed])
+  end
+
+  test "duplicate lifecycle starts conflict and invalid transitions halt projection" do
+    start = LifecycleHistory.start_event("life-duplicate")
+
+    assert {:error, {:conflicting_lifecycle_event, "life-duplicate"}} =
+             LifecycleHistory.project([start, Map.put(start, "schema", "different")])
+
+    assert {:error, {:invalid_lifecycle_role, "NOPE"}} =
+             LifecycleHistory.project([
+               start,
+               Map.put(transition_event("life-duplicate", "PM", "plan", "PLANNER", 1, 1), "from_role", "NOPE")
+             ])
   end
 
   test "history reconstructs planning attempts and completed working rounds" do
@@ -113,5 +249,9 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
   defp terminal_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt) do
     transition_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt)
     |> Map.put("kind", "terminal")
+  end
+
+  defp parse_event(event) do
+    LifecycleHistory.parse_comment(LifecycleHistory.render(event, "validation"))
   end
 end

@@ -29,6 +29,8 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert Enum.sort(roles) == [:planner, :pm]
     assert {:error, :missing_role_label} = RoleRouter.role_for_issue(%Issue{labels: []})
+    assert {:error, :missing_role_label} = RoleRouter.role_for_issue(:not_an_issue)
+    assert {:error, :missing_role_label} = RoleRouter.profile_for_issue(:not_an_issue)
   end
 
   test "dispatch derives a profile only from a valid issue role label" do
@@ -94,6 +96,12 @@ defmodule SymphonyElixir.RoleKernelTest do
       refute prompt =~ "Pilot"
     end
 
+    prompt =
+      PromptBuilder.build_prompt(issue, :pm, %{handoff: %{round: 2, findings: [:advisory]}})
+
+    assert prompt =~ "round: 2"
+    assert prompt =~ "findings: [:advisory]"
+
     implementer_prompt = PromptBuilder.build_prompt(issue, :implementer)
     assert implementer_prompt =~ "Do not modify .git"
     assert implementer_prompt =~ "stage, commit"
@@ -158,6 +166,25 @@ defmodule SymphonyElixir.RoleKernelTest do
              {:error, {:invalid_role_outcome, :planner, "accept"}}
 
     assert Lifecycle.transition(:not_a_role, "plan") == {:error, {:unknown_role, :not_a_role}}
+    assert Lifecycle.transition("NOT_A_ROLE", "plan") == {:error, {:unknown_role, "NOT_A_ROLE"}}
+
+    assert Lifecycle.transition(:planner, :not_an_outcome) ==
+             {:error, {:invalid_role_outcome, :planner, "not_an_outcome"}}
+
+    assert Lifecycle.transition(:planner, %{}) ==
+             {:error, {:invalid_role_outcome, :planner, %{}}}
+
+    assert Lifecycle.transition(:pm, "converge", %{
+             pm_phase: :returning,
+             completed_working_round?: true,
+             preceding_adversary_findings: :malformed
+           }) == {:error, :blocking_adversary_findings}
+
+    assert Lifecycle.transition(:pm, "converge", %{
+             pm_phase: :returning,
+             completed_working_round?: true,
+             preceding_adversary_findings: [:malformed]
+           }) == {:error, :blocking_adversary_findings}
   end
 
   test "role result validation is strict and does not accept model routing authority" do
@@ -193,8 +220,31 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert {:error, :invalid_role_result_evidence} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "evidence", ["", 12]))
 
+    assert {:error, :invalid_role_result_evidence} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "evidence", :none))
+
     assert {:error, :invalid_role_result_findings} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", :none))
+
+    assert {:error, :role_result_not_a_map} = Lifecycle.validate_result(:not_a_result)
+
+    valid_finding = %{
+      "severity" => "advisory",
+      "summary" => "useful finding",
+      "evidence" => []
+    }
+
+    assert {:ok, _} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", [valid_finding]))
+
+    assert {:error, :invalid_finding} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", [:bad]))
+
+    assert {:error, :invalid_finding_summary} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", [Map.put(valid_finding, "summary", 12)]))
+
+    assert {:error, :invalid_finding_evidence} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", [Map.put(valid_finding, "evidence", :bad)]))
   end
 
   test "role result decoding accepts exactly one expected-role JSON object" do
@@ -219,6 +269,11 @@ defmodule SymphonyElixir.RoleKernelTest do
              Lifecycle.decode_and_validate_result("{not json}", :reviewer)
 
     assert {:error, :role_result_not_a_map} = Lifecycle.decode_and_validate_result("[]", :reviewer)
+    assert {:error, :invalid_role_result_output} = Lifecycle.decode_and_validate_result([], :reviewer)
+  end
+
+  test "legal outcomes expose the canonical profile contract" do
+    assert Lifecycle.legal_outcomes(:planner) == ["plan_ready", "await_human"]
   end
 
   test "role result decoding enforces the host-selected role" do

@@ -33,13 +33,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
           | {:error, term()}
   def prepare_dispatch(%Issue{id: issue_id} = issue, _opts \\ []) when is_binary(issue_id) do
     if github_tracker?() do
-      with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
-           {:ok, comments} <- github_client().fetch_issue_comments(issue_id) do
-        case LifecycleHistory.from_comments(comments) do
-          {:ok, history} -> prepare_github_dispatch(current_issue, history)
-          {:error, reason} -> handle_invalid_state(current_issue, nil, reason)
-        end
-      end
+      prepare_github_dispatch_for_issue(issue_id)
     else
       {:ok, %{issue: issue, history: nil, handoff: %{}}}
     end
@@ -50,19 +44,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   def commit_role_result(%Issue{id: issue_id}, expected_role, result, _opts \\ [])
       when is_binary(issue_id) and is_map(result) do
     if github_tracker?() do
-      with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
-           {:ok, comments} <- github_client().fetch_issue_comments(issue_id) do
-        case LifecycleHistory.from_comments(comments) do
-          {:ok, history} ->
-            commit_with_history(current_issue, history, expected_role, result)
-
-          {:error, reason} ->
-            case block_invalid_state(current_issue, nil, reason) do
-              {:skip, _blocked} -> {:error, {:lifecycle_history_corrupt, reason}}
-              other -> other
-            end
-        end
-      end
+      commit_github_role_result(issue_id, expected_role, result)
     else
       {:error, :lifecycle_requires_github_tracker}
     end
@@ -92,6 +74,33 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp prepare_github_dispatch_for_issue(issue_id) do
+    with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
+         {:ok, comments} <- github_client().fetch_issue_comments(issue_id) do
+      case LifecycleHistory.from_comments(comments) do
+        {:ok, history} -> prepare_github_dispatch(current_issue, history)
+        {:error, reason} -> handle_invalid_state(current_issue, nil, reason)
+      end
+    end
+  end
+
+  defp commit_github_role_result(issue_id, expected_role, result) do
+    with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
+         {:ok, comments} <- github_client().fetch_issue_comments(issue_id) do
+      case LifecycleHistory.from_comments(comments) do
+        {:ok, history} -> commit_with_history(current_issue, history, expected_role, result)
+        {:error, reason} -> commit_invalid_history(current_issue, reason)
+      end
+    end
+  end
+
+  defp commit_invalid_history(current_issue, reason) do
+    case block_invalid_state(current_issue, nil, reason) do
+      {:skip, _blocked} -> {:error, {:lifecycle_history_corrupt, reason}}
+      other -> other
+    end
+  end
+
   defp commit_with_history(current_issue, history, expected_role, result) do
     with {:ok, validated_result} <- validate_expected_result(result, expected_role),
          idempotent <- idempotent_result(history, current_issue, validated_result, expected_role) do
@@ -100,21 +109,25 @@ defmodule SymphonyElixir.LifecycleCoordinator do
           ok
 
         :not_found ->
-          with :ok <- validate_commit_preconditions(current_issue, history, expected_role),
-               {:ok, transition} <- transition_for_commit(history, validated_result),
-               {:ok, persisted} <- persist_transition(current_issue, history, transition),
-               {:ok, projected_issue} <- project_and_verify(current_issue, transition),
-               {:ok, projected_history} <- projected_history_after(persisted, history) do
-            {:ok,
-             %{
-               event: persisted.event,
-               idempotent?: persisted.idempotent?,
-               issue: projected_issue,
-               history: projected_history,
-               transition: transition
-             }}
-          end
+          persist_new_transition(current_issue, history, expected_role, validated_result)
       end
+    end
+  end
+
+  defp persist_new_transition(current_issue, history, expected_role, validated_result) do
+    with :ok <- validate_commit_preconditions(current_issue, history, expected_role),
+         {:ok, transition} <- transition_for_commit(history, validated_result),
+         {:ok, persisted} <- persist_transition(current_issue, history, transition),
+         {:ok, projected_issue} <- project_and_verify(current_issue, transition),
+         {:ok, projected_history} <- projected_history_after(persisted, history) do
+      {:ok,
+       %{
+         event: persisted.event,
+         idempotent?: persisted.idempotent?,
+         issue: projected_issue,
+         history: projected_history,
+         transition: transition
+       }}
     end
   end
 
@@ -348,8 +361,6 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       history.terminal in ["lifecycle_complete", "non_converged", "awaiting-human", "blocked"]
   end
 
-  defp terminal_rerun?(_issue, _history, _role), do: false
-
   defp validate_commit_preconditions(issue, history, expected_role) do
     with :ok <- validate_active_issue(issue),
          :ok <- validate_opt_in(issue),
@@ -360,7 +371,6 @@ defmodule SymphonyElixir.LifecycleCoordinator do
          true <- history.current_role == expected_role or {:error, :history_role_mismatch} do
       :ok
     else
-      false -> {:error, :invalid_lifecycle_commit_precondition}
       {:error, _reason} = error -> error
     end
   end
@@ -603,16 +613,6 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
-  defp verify_pm_continuity_block(issue) do
-    if not has_label?(issue.labels, @auto_label) and
-         RoleRouter.role_for_issue(issue) == {:ok, :pm} and
-         has_label?(issue.labels, @blocked_label) do
-      :ok
-    else
-      {:error, :pm_continuity_block_projection_verification_failed}
-    end
-  end
-
   defp verify_projection(issue, {:awaiting_human, _}) do
     with false <- has_label?(issue.labels, @auto_label),
          true <- has_label?(issue.labels, @awaiting_human_label),
@@ -640,38 +640,51 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp verify_pm_continuity_block(issue) do
+    if not has_label?(issue.labels, @auto_label) and
+         RoleRouter.role_for_issue(issue) == {:ok, :pm} and
+         has_label?(issue.labels, @blocked_label) do
+      :ok
+    else
+      {:error, :pm_continuity_block_projection_verification_failed}
+    end
+  end
+
   defp reconcile_active_projection(issue, history, role) do
+    if active_projection_is_current?(issue, history, role) do
+      :ok
+    else
+      reconcile_active_projection_repair(issue, history, role)
+    end
+  end
+
+  defp active_projection_is_current?(issue, history, role) do
+    has_label?(issue.labels, @auto_label) and
+      role == history.current_role and
+      not Enum.any?(issue.labels, &state_label?/1)
+  end
+
+  defp reconcile_active_projection_repair(issue, history, role) do
     cond do
-      has_label?(issue.labels, @auto_label) and role == history.current_role and
-          not Enum.any?(issue.labels, &state_label?/1) ->
-        :ok
+      initial_pm_projection?(issue, history) -> repair_active_projection(issue, :pm)
+      stale_previous_role?(issue, history) -> repair_active_projection(issue, history.current_role)
+      no_role_label?(issue) -> repair_active_projection(issue, history.current_role)
+      true -> {:error, {:lifecycle_label_corruption, role, history.current_role}}
+    end
+  end
 
-      has_label?(issue.labels, @auto_label) and role == :pm and
-        length(history.events) == 1 and
-        Enum.any?(history.events, &(&1["kind"] == "lifecycle_started")) and
-          Enum.any?(issue.labels, &state_label?/1) ->
-        project_and_verify(issue, %{kind: "transition", to_role: :pm})
-        |> case do
-          {:ok, _issue} -> :ok
-          {:error, _reason} = error -> error
-        end
+  defp initial_pm_projection?(issue, history) do
+    has_label?(issue.labels, @auto_label) and
+      history.current_role == :pm and
+      length(history.events) == 1 and
+      Enum.any?(history.events, &(&1["kind"] == "lifecycle_started")) and
+      Enum.any?(issue.labels, &state_label?/1)
+  end
 
-      has_label?(issue.labels, @auto_label) and stale_previous_role?(issue, history) ->
-        project_and_verify(issue, %{kind: "transition", to_role: history.current_role})
-        |> case do
-          {:ok, _issue} -> :ok
-          {:error, _reason} = error -> error
-        end
-
-      has_label?(issue.labels, @auto_label) and no_role_label?(issue) ->
-        project_and_verify(issue, %{kind: "transition", to_role: history.current_role})
-        |> case do
-          {:ok, _issue} -> :ok
-          {:error, _reason} = error -> error
-        end
-
-      true ->
-        {:error, {:lifecycle_label_corruption, role, history.current_role}}
+  defp repair_active_projection(issue, role) do
+    case project_and_verify(issue, %{kind: "transition", to_role: role}) do
+      {:ok, _issue} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
@@ -710,7 +723,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
-  defp projected_history_after(%{event: event, idempotent?: true}, history), do: {:ok, history}
+  defp projected_history_after(%{idempotent?: true}, history), do: {:ok, history}
 
   defp projected_history_after(%{event: event, idempotent?: false}, history) do
     LifecycleHistory.project(history.events ++ [event])

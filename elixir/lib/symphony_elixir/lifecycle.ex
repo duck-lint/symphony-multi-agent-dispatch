@@ -42,19 +42,7 @@ defmodule SymphonyElixir.Lifecycle do
         {:error, :missing_role_result_output}
 
       trimmed ->
-        case Jason.decode(trimmed) do
-          {:ok, result} when is_map(result) ->
-            with {:ok, validated_result} <- validate_result(result),
-                 :ok <- validate_expected_role(validated_result, expected_role) do
-              {:ok, validated_result}
-            end
-
-          {:ok, _result} ->
-            {:error, :role_result_not_a_map}
-
-          {:error, reason} ->
-            {:error, {:role_result_json_decode_error, reason}}
-        end
+        decode_result_json(trimmed, expected_role)
     end
   end
 
@@ -127,7 +115,6 @@ defmodule SymphonyElixir.Lifecycle do
   defp transition_for(:implementer, "implementation_complete", _context), do: {:ok, :adversary}
   defp transition_for(:adversary, "review_complete", _context), do: {:ok, :pm}
   defp transition_for(:archivist, "archive_complete", _context), do: {:ok, :lifecycle_complete}
-  defp transition_for(role, outcome, _context), do: {:error, {:illegal_transition, role, outcome}}
 
   defp validate_result_keys(result) do
     keys = Map.keys(result)
@@ -160,6 +147,22 @@ defmodule SymphonyElixir.Lifecycle do
   end
 
   defp validate_result_outcome(role, outcome), do: {:error, {:invalid_role_outcome, role, outcome}}
+
+  defp decode_result_json(trimmed, expected_role) do
+    case Jason.decode(trimmed) do
+      {:ok, result} when is_map(result) ->
+        with {:ok, validated_result} <- validate_result(result),
+             :ok <- validate_expected_role(validated_result, expected_role) do
+          {:ok, validated_result}
+        end
+
+      {:ok, _result} ->
+        {:error, :role_result_not_a_map}
+
+      {:error, reason} ->
+        {:error, {:role_result_json_decode_error, reason}}
+    end
+  end
 
   defp validate_expected_role(result, expected_role) do
     with {:ok, canonical_expected_role} <- canonical_role(expected_role) do
@@ -205,32 +208,42 @@ defmodule SymphonyElixir.Lifecycle do
   defp validate_findings(_findings), do: {:error, :invalid_role_result_findings}
 
   defp validate_finding(finding) when is_map(finding) do
-    missing = @finding_keys -- Map.keys(finding)
-    unknown = Map.keys(finding) -- @finding_keys
-
-    cond do
-      unknown != [] ->
-        {:error, {:unknown_finding_fields, unknown}}
-
-      missing != [] ->
-        {:error, {:missing_finding_fields, missing}}
-
-      finding["severity"] not in ["blocking", "advisory"] ->
-        {:error, :invalid_finding_severity}
-
-      not is_binary(finding["summary"]) or String.trim(finding["summary"]) == "" ->
-        {:error, :invalid_finding_summary}
-
-      not is_list(finding["evidence"]) or
-          not Enum.all?(finding["evidence"], &(is_binary(&1) and String.trim(&1) != "")) ->
-        {:error, :invalid_finding_evidence}
-
-      true ->
-        :ok
+    with :ok <- validate_finding_keys(finding),
+         :ok <- validate_finding_severity(finding),
+         :ok <- validate_finding_summary(finding) do
+      validate_finding_evidence(finding)
     end
   end
 
   defp validate_finding(_finding), do: {:error, :invalid_finding}
+
+  defp validate_finding_keys(finding) do
+    missing = @finding_keys -- Map.keys(finding)
+    unknown = Map.keys(finding) -- @finding_keys
+
+    cond do
+      unknown != [] -> {:error, {:unknown_finding_fields, unknown}}
+      missing != [] -> {:error, {:missing_finding_fields, missing}}
+      true -> :ok
+    end
+  end
+
+  defp validate_finding_severity(%{"severity" => severity}) when severity in ["blocking", "advisory"], do: :ok
+  defp validate_finding_severity(_finding), do: {:error, :invalid_finding_severity}
+
+  defp validate_finding_summary(%{"summary" => summary}) when is_binary(summary) do
+    if String.trim(summary) == "", do: {:error, :invalid_finding_summary}, else: :ok
+  end
+
+  defp validate_finding_summary(_finding), do: {:error, :invalid_finding_summary}
+
+  defp validate_finding_evidence(%{"evidence" => evidence}) when is_list(evidence) do
+    if Enum.all?(evidence, &(is_binary(&1) and String.trim(&1) != "")),
+      do: :ok,
+      else: {:error, :invalid_finding_evidence}
+  end
+
+  defp validate_finding_evidence(_finding), do: {:error, :invalid_finding_evidence}
 
   defp validate_human_question("await_human", question)
        when is_binary(question) and byte_size(question) > 0,
