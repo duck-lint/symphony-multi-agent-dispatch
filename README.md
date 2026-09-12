@@ -24,8 +24,9 @@ developer bridge:
 python scripts/wsl_validation.py --cwd F:\\PROJECT-REPOS\\symphony-multi-agent-dispatch\\elixir -- mix test
 ```
 
-The bridge authorizes only this Windows checkout, resolves its mounted WSL path
-with `wslpath`, validates the canonical cwd remains inside the checkout, uses
-Ubuntu-24.04 as `duck-lint`, and launches the declared `mise` toolchain with a
-sterile environment. It is validation tooling only; it does not own lifecycle
-state or create a second source checkout.
+The bridge authorizes only this Windows checkout, archives the current working
+tree (including uncommitted edits) into a disposable native WSL directory
+under `/home/duck-lint`, maps the requested cwd by repository-relative path,
+uses Ubuntu-24.04 as `duck-lint`, and launches the declared `mise` toolchain
+with a sterile environment. It is validation tooling only; it does not own
+lifecycle state or create a second authoritative source checkout.

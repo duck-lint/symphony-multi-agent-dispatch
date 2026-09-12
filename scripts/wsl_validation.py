@@ -10,10 +10,12 @@ onto a second SYMPHONY source tree.
 from __future__ import annotations
 
 import argparse
+import io
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
+import tarfile
 from typing import Sequence
 
 
@@ -23,6 +25,9 @@ WSL_USER = "duck-lint"
 MAX_TIMEOUT_SECONDS = 60 * 60
 PATH_RESOLUTION_TIMEOUT_SECONDS = 60
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_STAGING_ARCHIVE_BYTES = 128 * 1024 * 1024
+NATIVE_STAGING_PARENT = "/home/duck-lint"
+NATIVE_STAGING_PREFIX = ".symphony-validation-"
 ALLOWED_COMMANDS = frozenset(
     {
         "elixir",
@@ -63,11 +68,13 @@ def _run_wsl(
     arguments: Sequence[str],
     *,
     timeout_seconds: float,
+    input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
             [str(wsl), "--distribution", WSL_DISTRIBUTION, "--user", WSL_USER, *arguments],
-            stdin=subprocess.DEVNULL,
+            input=input_data,
+            stdin=subprocess.DEVNULL if input_data is None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=_wsl_environment(),
@@ -94,26 +101,7 @@ def _single_line_output(result: subprocess.CompletedProcess[bytes], purpose: str
     return lines[0]
 
 
-def _canonical_wsl_path(wsl: Path, windows_path: Path, *, purpose: str) -> str:
-    converted = _single_line_output(
-        _run_wsl(
-            wsl,
-            ["--exec", "/usr/bin/wslpath", "-a", "-u", str(windows_path)],
-            timeout_seconds=PATH_RESOLUTION_TIMEOUT_SECONDS,
-        ),
-        f"{purpose} Windows-to-WSL resolution",
-    )
-    return _single_line_output(
-        _run_wsl(
-            wsl,
-            ["--exec", "/usr/bin/readlink", "-e", "--", converted],
-            timeout_seconds=PATH_RESOLUTION_TIMEOUT_SECONDS,
-        ),
-        f"{purpose} canonicalization",
-    )
-
-
-def _authorized_root(wsl: Path) -> tuple[Path, str]:
+def _authorized_root() -> Path:
     repository_root = Path(__file__).resolve().parents[1]
     if repository_root != AUTHORIZED_WINDOWS_ROOT.resolve():
         raise ValidationBridgeError(
@@ -122,19 +110,121 @@ def _authorized_root(wsl: Path) -> tuple[Path, str]:
         )
     if not (repository_root / ".git").exists() or not (repository_root / "elixir" / "mix.exs").is_file():
         raise ValidationBridgeError("the authorized checkout is not a SYMPHONY source checkout")
-    return repository_root, _canonical_wsl_path(wsl, repository_root, purpose="repository cwd")
+    return repository_root
 
 
-def _authorized_cwd(wsl: Path, repository_root: Path, repository_wsl_root: str, cwd: str) -> str:
+def _authorized_cwd(repository_root: Path, cwd: str) -> Path:
     requested = Path(cwd).resolve() if cwd else repository_root
     try:
         requested.relative_to(repository_root)
     except ValueError as exc:
         raise ValidationBridgeError("cwd is outside the authorized SYMPHONY checkout") from exc
-    canonical = _canonical_wsl_path(wsl, requested, purpose="requested cwd")
-    if canonical != repository_wsl_root and not canonical.startswith(repository_wsl_root + "/"):
-        raise ValidationBridgeError("canonical cwd leaves the authorized SYMPHONY checkout")
-    return canonical
+    if not requested.is_dir():
+        raise ValidationBridgeError("cwd is not an existing directory in the authorized checkout")
+    return requested
+
+
+def _relative_cwd(repository_root: Path, requested_cwd: Path) -> str:
+    relative = requested_cwd.relative_to(repository_root)
+    return "" if relative == Path(".") else relative.as_posix()
+
+
+def _excluded_from_staging(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    if not parts:
+        return False
+    if parts[0] == ".git":
+        return True
+    return len(parts) >= 2 and parts[:2] in {
+        ("elixir", "_build"),
+        ("elixir", "cover"),
+        ("elixir", "deps"),
+        ("elixir", "bin"),
+        ("elixir", "log"),
+        ("elixir", "logs"),
+        ("elixir", "tmp"),
+    }
+
+
+def _working_tree_archive(repository_root: Path) -> bytes:
+    """Archive current filesystem content, including edits not present in HEAD.
+
+    Git metadata and generated validation output are deliberately omitted.  The
+    staged tree is disposable source material, not a second authoritative
+    checkout, and Mix will recreate its own dependencies and build artifacts.
+    """
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+        for root, directory_names, file_names in os.walk(repository_root, topdown=True, followlinks=False):
+            root_path = Path(root)
+            root_relative = root_path.relative_to(repository_root)
+            directory_names[:] = sorted(
+                name
+                for name in directory_names
+                if not _excluded_from_staging(root_relative / name)
+            )
+            for name in sorted(file_names):
+                file_path = root_path / name
+                relative_path = file_path.relative_to(repository_root)
+                if _excluded_from_staging(relative_path):
+                    continue
+                archive.add(file_path, arcname=relative_path.as_posix(), recursive=False)
+                if archive_buffer.tell() > MAX_STAGING_ARCHIVE_BYTES:
+                    raise ValidationBridgeError("current working tree exceeds the staging archive limit")
+    return archive_buffer.getvalue()
+
+
+def _validate_native_staging_root(staging_root: str) -> str:
+    candidate = PurePosixPath(staging_root)
+    if (
+        candidate.parent.as_posix() != NATIVE_STAGING_PARENT
+        or not candidate.name.startswith(NATIVE_STAGING_PREFIX)
+        or len(candidate.name) <= len(NATIVE_STAGING_PREFIX)
+    ):
+        raise ValidationBridgeError("WSL returned an invalid disposable staging path")
+    return candidate.as_posix()
+
+
+def _create_native_staging_root(wsl: Path) -> str:
+    result = _run_wsl(
+        wsl,
+        [
+            "--exec",
+            "/usr/bin/mktemp",
+            "-d",
+            "-p",
+            NATIVE_STAGING_PARENT,
+            NATIVE_STAGING_PREFIX + "XXXXXX",
+        ],
+        timeout_seconds=PATH_RESOLUTION_TIMEOUT_SECONDS,
+    )
+    return _validate_native_staging_root(_single_line_output(result, "native staging directory creation"))
+
+
+def _extract_working_tree(wsl: Path, staging_root: str, archive_data: bytes) -> None:
+    result = _run_wsl(
+        wsl,
+        ["--cd", staging_root, "--exec", "/usr/bin/tar", "-xzf", "-"],
+        timeout_seconds=PATH_RESOLUTION_TIMEOUT_SECONDS,
+        input_data=archive_data,
+    )
+    if result.returncode != 0:
+        raise ValidationBridgeError("disposable WSL-native staging extraction failed")
+
+
+def _cleanup_native_staging(wsl: Path, staging_root: str) -> None:
+    staging_root = _validate_native_staging_root(staging_root)
+    result = _run_wsl(
+        wsl,
+        ["--exec", "/usr/bin/rm", "-rf", "--", staging_root],
+        timeout_seconds=PATH_RESOLUTION_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise ValidationBridgeError("disposable WSL-native staging cleanup failed")
+
+
+def _staged_cwd(staging_root: str, relative_cwd: str) -> str:
+    return PurePosixPath(staging_root, relative_cwd).as_posix() if relative_cwd else staging_root
 
 
 def _validate_command(command: Sequence[str]) -> tuple[str, ...]:
@@ -148,20 +238,10 @@ def _validate_command(command: Sequence[str]) -> tuple[str, ...]:
     return tuple(command)
 
 
-def execute(cwd: str, command: Sequence[str], *, timeout_seconds: float = 30 * 60) -> int:
-    if not 0 < timeout_seconds <= MAX_TIMEOUT_SECONDS:
-        raise ValidationBridgeError("timeout is outside the bounded bridge range")
-    wsl = _wsl_executable()
-    repository_root, repository_wsl_root = _authorized_root(wsl)
-    resolved_cwd = _authorized_cwd(wsl, repository_root, repository_wsl_root, cwd)
-    validated_command = _validate_command(command)
-
-    # mise is the project's declared toolchain mechanism.  The sterile Linux
-    # environment keeps tracker credentials and inherited WSL configuration
-    # out of the child while retaining only the toolchain bootstrap paths.
-    arguments = [
+def _validation_arguments(staged_cwd: str, command: Sequence[str]) -> list[str]:
+    return [
         "--cd",
-        resolved_cwd,
+        staged_cwd,
         "--exec",
         "/usr/bin/env",
         "-i",
@@ -174,16 +254,39 @@ def execute(cwd: str, command: Sequence[str], *, timeout_seconds: float = 30 * 6
         "/home/duck-lint/.local/bin/mise",
         "exec",
         "--",
-        *validated_command,
+        *command,
     ]
-    result = _run_wsl(wsl, arguments, timeout_seconds=timeout_seconds)
-    # Write UTF-8 bytes so Windows' legacy console code page cannot make the
-    # bridge fail while forwarding Credo or Mix diagnostics.
-    sys.stdout.buffer.write(_decode_output(result.stdout).encode("utf-8"))
-    sys.stderr.buffer.write(_decode_output(result.stderr).encode("utf-8"))
-    sys.stdout.flush()
-    sys.stderr.flush()
-    return result.returncode
+
+
+def execute(cwd: str, command: Sequence[str], *, timeout_seconds: float = 30 * 60) -> int:
+    if not 0 < timeout_seconds <= MAX_TIMEOUT_SECONDS:
+        raise ValidationBridgeError("timeout is outside the bounded bridge range")
+    wsl = _wsl_executable()
+    repository_root = _authorized_root()
+    requested_cwd = _authorized_cwd(repository_root, cwd)
+    validated_command = _validate_command(command)
+    archive_data = _working_tree_archive(repository_root)
+    relative_cwd = _relative_cwd(repository_root, requested_cwd)
+    staging_root = _create_native_staging_root(wsl)
+    try:
+        _extract_working_tree(wsl, staging_root, archive_data)
+        # mise is the project's declared toolchain mechanism.  The sterile
+        # Linux environment keeps tracker credentials and inherited WSL
+        # configuration out of the child while retaining only toolchain paths.
+        result = _run_wsl(
+            wsl,
+            _validation_arguments(_staged_cwd(staging_root, relative_cwd), validated_command),
+            timeout_seconds=timeout_seconds,
+        )
+        # Write UTF-8 bytes so Windows' legacy console code page cannot make
+        # the bridge fail while forwarding Credo or Mix diagnostics.
+        sys.stdout.buffer.write(_decode_output(result.stdout).encode("utf-8"))
+        sys.stderr.buffer.write(_decode_output(result.stderr).encode("utf-8"))
+        sys.stdout.flush()
+        sys.stderr.flush()
+        return result.returncode
+    finally:
+        _cleanup_native_staging(wsl, staging_root)
 
 
 def _parser() -> argparse.ArgumentParser:
