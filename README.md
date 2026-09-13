@@ -4,16 +4,18 @@ This repository is a clean upstream-based rebuild of SYMPHONY. It is not a compr
 
 Read [AGENTS.md](AGENTS.md) for repository authority and change boundaries, and
 [the MVP invariants](harness/SYMPHONY-multi-agent-dispatch_MVP_INVARIANTS.md) for the intended lifecycle
-and rebuild guardrails.
+and rebuild guardrails. [Current runtime state](docs/current-state.md) records the operational contract,
+runtime-evidence status, and deployment provenance.
 
 Project-local `.symphony/instance_config.yml` binds/configures one project-scoped runtime instance only. It does
 not define the shared lifecycle, role behavior, or lifecycle authority. The shared multi-role lifecycle
 is SYMPHONY behavior structurally enforced by host code; dispatched agents use the target repository's
 applicable `AGENTS.md`, harness, and source context.
 
-The current host includes the pure lifecycle/role kernel, SYMPHONY-owned role profiles, and
-host-enforced role runtime authority. GitHub lifecycle transition persistence remains a separate
-lifecycle seam.
+The host includes the pure lifecycle/role kernel, SYMPHONY-owned role profiles, host-enforced role
+runtime authority, and GitHub lifecycle transition persistence. Lifecycle state remains projected by
+GitHub labels and recorded by append-only host comments; host-local PM metadata is reconnect metadata
+only.
 
 ## Linux validation from Windows
 
@@ -47,9 +49,13 @@ packaging build is run from `elixir` with:
 
 ```bash
 SYMPHONY_BUILD_REVISION="<40-character committed Git SHA>" \
-  BURRITO_TARGET=linux_x86_64 MIX_ENV=prod mix release --overwrite
+  BURRITO_TARGET=linux_x86_64 MIX_ENV=prod \
+  mise exec -- mix release symphony --overwrite
 ```
 
-Production Burrito builds require the committed source revision. The revision is
-embedded in the release version and therefore in Burrito's extracted payload
-identity; omitting it or supplying a non-SHA value fails the production build.
+Build from a clean WSL-native `git archive` snapshot of the exact committed source. Production Burrito
+builds require that committed revision; it is embedded in the release version and therefore in Burrito's
+extracted payload identity. Omitting it or supplying a non-SHA value fails the production build. Install
+the executable under a revision-scoped directory, verify its embedded revision and extracted payload
+before launch, and never reuse an extracted Burrito payload from another revision. See the current-state
+document for the source-to-executing-runtime checks and required Codex model configuration.

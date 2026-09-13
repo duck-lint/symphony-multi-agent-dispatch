@@ -1,7 +1,7 @@
 # SYMPHONY MVP — Lifecycle Invariants & Rebuild Guardrails
 
-**Status:** Pre-implementation semantic contract. Intentionally concise.  
-**Purpose:** Preserve the desired behavior while rebuilding from fresh upstream `openai/symphony` without re-importing the custom Pilot/Runtime architecture.
+**Status:** Current MVP semantic contract.
+**Purpose:** Preserve the accepted lifecycle and authority boundaries while maintaining the upstream-derived SYMPHONY implementation.
 
 ## 1. Primary invariant
 
@@ -238,7 +238,9 @@ The PM thread ID is host-owned local state stored under Symphony's state root, o
 <state-root>/<project-instance>/<issue-id>/pm-thread.json
 ```
 
-The record need contain only the active `lifecycle_id` and PM `thread_id` plus minimal versioning required for safe loading.
+The record contains the active `lifecycle_id`, PM `thread_id`, and optional Codex rollout/thread path metadata
+returned by the app-server. These are host-local reconnect metadata only; they do not authorize, advance, or
+reconstruct lifecycle state.
 
 MVP guarantees **same-machine restart continuity**, not portable cross-machine PM continuity. Publishing the thread ID into GitHub does not make an absent Codex thread resumable and is not required.
 
@@ -408,20 +410,13 @@ The adapter is **developer/tooling infrastructure only**. It must not become lif
 
 The MVP uses one authoritative SYMPHONY source checkout. WSL may host installed/built runtime artifacts, logs, caches, host-owned state, and project/issue workspaces, but it must not maintain a second independently authoritative SYMPHONY source repository.
 
-### Fresh WSL reset before the new canary
+### Revision-specific runtime provenance
 
-The old custom SYMPHONY runtime/control-plane state in WSL should be removed before the clean upstream-based build is exercised.
-
-Intent:
-
-- no compatibility with the abandoned Pilot/Runtime architecture;
-- no stale deployment, runtime state, workspace, lock, cache, or extracted artifact should influence the new MVP;
-- do **not** reinstall or wipe the whole WSL distro merely to remove SYMPHONY;
-- preserve unrelated WSL state, Codex installation/auth, Git/user configuration, and unrelated projects/tools.
-
-Before deletion, produce an explicit manifest of Symphony-specific WSL paths/state to remove. After reset, reinstall only the minimal adapter/supervisor bridge actually required by the new target `.symphony/instance_config.yml`.
-
-There is no migration/backward-compatibility requirement for abandoned SYMPHONY state.
+The authoritative committed source, build input, Burrito executable, extracted Burrito payload, and code
+actually executing must identify the same committed revision. Build Linux x86_64 from a clean WSL-native
+`git archive` snapshot with `SYMPHONY_BUILD_REVISION` set to the exact 40-character SHA, install under a
+SHA-scoped directory, and verify the embedded release/payload identity before launch. A commit-scoped
+executable pathname alone is insufficient; an extracted payload from another revision must not be reused.
 
 ## 11. Parked architecture
 
@@ -447,7 +442,12 @@ Before any implementation seam is widened, ask:
 
 If not, it is out of MVP scope unless required for safety or to preserve already-working upstream behavior.
 
-The canary is successful when the human creates/opts-in one disposable issue and then does nothing while SYMPHONY proves:
+The canary is the acceptance gate for representative runtime behavior. It is not a synthetic fixture and it
+does not define lifecycle semantics. The canary may falsify an implementation claim, but SYMPHONY must not
+be shaped around a canary repository, issue, or task.
+
+The happy-path gate proves, on the real canary substrate, that the human can create/opt-in one disposable
+issue and then do nothing while SYMPHONY performs:
 
 ```text
 PM P1
@@ -472,3 +472,32 @@ with:
 - the implementation left in the issue workspace without automatic Git publication;
 - the GitHub issue still open for human disposition;
 - no human acting as the routine message bus.
+
+## 13. Runtime validation doctrine and current evidence
+
+Synthetic tests are regression protection, not runtime acceptance evidence. Runtime claims require
+representative runtime evidence. The current evidence status is recorded as capabilities, not as a
+percentage or coverage score.
+
+Demonstrated on the real canary substrate:
+
+- eligible issue intake and PM planning;
+- fresh Planner, fresh Reviewer, bounded Implementer, fresh Adversary, and fresh Archivist execution;
+- exact task-scoped PM resume and PM convergence;
+- durable GitHub lifecycle projection and append-only handoffs;
+- `symphony:state:lifecycle-complete` while the issue remains open;
+- autonomous removal of `symphony:auto` and the role label;
+- post-terminal polling that is read-only/quiescent;
+- fail-closed PM continuity failure from an earlier canary;
+- recovery across host restart after a role-result contract failure.
+
+Still requiring representative canary evidence:
+
+- Reviewer → Planner revision;
+- Adversary blocker → PM → another working round;
+- planning-attempt exhaustion;
+- working-round budget / non-converged termination;
+- awaiting-human;
+- healthy mid-lifecycle restart/recovery;
+- repair of actual terminal projection drift;
+- multiple eligible issues and configured concurrency behavior.
