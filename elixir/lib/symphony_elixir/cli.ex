@@ -6,7 +6,7 @@ defmodule SymphonyElixir.CLI do
   alias SymphonyElixir.LogFile
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
+  @switches [{@acknowledgement_switch, :boolean}, help: :boolean, logs_root: :string, port: :integer]
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
@@ -29,31 +29,43 @@ defmodule SymphonyElixir.CLI do
       :ok ->
         wait_for_shutdown()
 
+      {:help, message} ->
+        IO.puts(message)
+        System.halt(0)
+
       {:error, message} ->
         IO.puts(:stderr, message)
         System.halt(1)
     end
   end
 
-  @spec evaluate([String.t()], deps()) :: :ok | {:error, String.t()}
+  @spec evaluate([String.t()], deps()) :: :ok | {:help, String.t()} | {:error, String.t()}
   def evaluate(args, deps \\ runtime_deps()) do
-    case OptionParser.parse(args, strict: @switches) do
-      {opts, [], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
-             :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
-          run(Path.expand(Path.join(".symphony", "instance_config.yml")), deps)
-        end
-
-      {opts, [instance_config_path], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
-             :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
-          run(instance_config_path, deps)
-        end
+    case OptionParser.parse(args, strict: @switches, aliases: [h: :help]) do
+      {opts, paths, []} ->
+        evaluate_parsed(opts, paths, deps)
 
       _ ->
         {:error, usage_message()}
+    end
+  end
+
+  defp evaluate_parsed(opts, paths, deps) do
+    case Keyword.get(opts, :help, false) do
+      true -> {:help, usage_message()}
+      false -> evaluate_paths(opts, paths, deps)
+    end
+  end
+
+  defp evaluate_paths(opts, [], deps), do: run_selected_path(opts, Path.join(".symphony", "instance_config.yml"), deps)
+  defp evaluate_paths(opts, [path], deps), do: run_selected_path(opts, path, deps)
+  defp evaluate_paths(_opts, _paths, _deps), do: {:error, usage_message()}
+
+  defp run_selected_path(opts, path, deps) do
+    with :ok <- require_guardrails_acknowledgement(opts),
+         :ok <- maybe_set_logs_root(opts, deps),
+         :ok <- maybe_set_server_port(opts, deps) do
+      run(path, deps)
     end
   end
 
@@ -78,7 +90,7 @@ defmodule SymphonyElixir.CLI do
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-.symphony/instance_config.yml]"
+    "Usage: symphony [--help] [--logs-root <path>] [--port <port>] [path-to-.symphony/instance_config.yml]"
   end
 
   @spec runtime_deps() :: deps()

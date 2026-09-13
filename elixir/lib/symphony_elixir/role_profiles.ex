@@ -186,12 +186,18 @@ defmodule SymphonyElixir.RoleProfiles do
   def role_for_label(_label), do: []
 
   @spec result_contract_instructions() :: String.t()
-  def result_contract_instructions do
+  def result_contract_instructions, do: result_contract_instructions(:pm)
+
+  @spec result_contract_instructions(role()) :: String.t()
+  def result_contract_instructions(role) when is_map_key(@profiles, role) do
+    allowed_outcomes = role |> allowed_outcomes() |> Enum.join(" | ")
+
     """
     Return exactly one JSON object with schema "symphony.role-result/v1" and these fields:
     role (the assigned uppercase role), outcome, summary, evidence (a list of bounded strings),
     findings (a list of {severity, summary, evidence} objects), and optional human_question.
-    Use only the outcome allowed for your assigned role. Findings may use only "blocking" or
+    For this #{role_name(role)} role, outcome must be exactly one of: #{allowed_outcomes}.
+    Do not invent synonyms such as "handoff" or "done". Findings may use only "blocking" or
     "advisory" severity. Do not emit next_role; the host owns all routing decisions.
     """
   end

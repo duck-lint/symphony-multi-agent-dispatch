@@ -57,6 +57,24 @@ defmodule SymphonyElixir.CLITest do
     assert :ok = CLI.evaluate([@ack_flag], deps)
   end
 
+  test "returns help without requiring guardrails acknowledgement or starting the app" do
+    parent = self()
+
+    deps = %{
+      file_regular?: fn _path -> send(parent, :file_checked) end,
+      set_instance_config_file_path: fn _path -> send(parent, :instance_config_set) end,
+      set_logs_root: fn _path -> send(parent, :logs_root_set) end,
+      set_server_port_override: fn _port -> send(parent, :port_set) end,
+      ensure_all_started: fn -> send(parent, :started) end
+    }
+
+    assert {:help, message} = CLI.evaluate(["--help"], deps)
+    assert message =~ "Usage: symphony"
+    refute_received :file_checked
+    refute_received :instance_config_set
+    refute_received :started
+  end
+
   test "uses an explicit instance_config path override when provided" do
     parent = self()
     instance_config_path = "tmp/custom/instance_config.yml"

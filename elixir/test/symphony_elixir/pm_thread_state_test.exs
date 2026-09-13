@@ -51,7 +51,13 @@ defmodule SymphonyElixir.PMThreadStateTest do
              PMThreadState.resolve("42", "new-life", :returning)
 
     assert :ok = PMThreadState.put("42", "new-life", "thread-new")
-    assert {:resume, "thread-new"} = PMThreadState.resolve("42", "new-life", :returning)
+    assert {:resume, "thread-new", nil} = PMThreadState.resolve("42", "new-life", :returning)
+  end
+
+  test "persists the Codex rollout path when the app-server provides one" do
+    assert :ok = PMThreadState.put("42", "life-1", "thread-1", thread_path: "/tmp/rollout.json")
+    assert {:ok, record} = PMThreadState.load("42")
+    assert record["thread_path"] == "/tmp/rollout.json"
   end
 
   test "malformed state is replaceable only for a genuinely initial PM" do

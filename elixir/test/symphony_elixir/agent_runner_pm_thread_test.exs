@@ -52,7 +52,12 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
 
       assert_receive {:role_execution_completed, "issue-pm-first", %{role: :pm, thread_id: "thread-pm-first"}}
 
-      assert {:ok, %{"lifecycle_id" => "life-1", "thread_id" => "thread-pm-first"}} =
+      assert {:ok,
+              %{
+                "lifecycle_id" => "life-1",
+                "thread_id" => "thread-pm-first",
+                "thread_path" => "/tmp/thread-pm-first.json"
+              }} =
                PMThreadState.load(issue.id)
     after
       File.rm_rf(test_root)
@@ -188,7 +193,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
       case mode do
         :fresh ->
           """
-          3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"#{thread_id}"}}}' ;;
+          3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"#{thread_id}","path":"/tmp/thread-pm-first.json"}}}' ;;
           4)
             test -f "#{state_path}" || exit 1
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-pm"}}}'

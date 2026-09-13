@@ -46,5 +46,10 @@ The project declares Zig `0.15.2` in `elixir/mise.toml`. A Linux x86_64
 packaging build is run from `elixir` with:
 
 ```bash
-BURRITO_TARGET=linux_x86_64 MIX_ENV=prod mix release --overwrite
+SYMPHONY_BUILD_REVISION="<40-character committed Git SHA>" \
+  BURRITO_TARGET=linux_x86_64 MIX_ENV=prod mix release --overwrite
 ```
+
+Production Burrito builds require the committed source revision. The revision is
+embedded in the release version and therefore in Burrito's extracted payload
+identity; omitting it or supplying a non-SHA value fails the production build.

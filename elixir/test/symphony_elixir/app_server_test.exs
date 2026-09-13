@@ -1800,7 +1800,8 @@ defmodule SymphonyElixir.AppServerTest do
     opts =
       case mode do
         :fresh -> []
-        mode when mode in [:reuse, :reuse_failure, :reuse_mismatch] -> [thread_id: "thread-existing"]
+        :reuse -> [thread_id: "thread-existing", thread_path: "/tmp/thread-existing.json"]
+        mode when mode in [:reuse_failure, :reuse_mismatch] -> [thread_id: "thread-existing"]
       end
 
     try do
@@ -1814,6 +1815,7 @@ defmodule SymphonyElixir.AppServerTest do
         :reuse ->
           assert_request_methods(requests, ["initialize", "initialized", "thread/resume", "turn/start"])
           assert requests =~ "\"threadId\":\"thread-existing\""
+          assert requests =~ "\"path\":\"/tmp/thread-existing.json\""
 
         mode when mode in [:reuse_failure, :reuse_mismatch] ->
           assert_request_methods(requests, ["initialize", "initialized", "thread/resume"])

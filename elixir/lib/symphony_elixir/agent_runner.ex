@@ -222,8 +222,15 @@ defmodule SymphonyElixir.AgentRunner do
 
     if is_binary(lifecycle_id) and phase in [:initial, :returning] do
       case PMThreadState.resolve(issue_id, lifecycle_id, phase) do
-        {:resume, thread_id} ->
-          {:ok, %{kind: :pm, thread_id: thread_id, persist?: false, lifecycle_id: lifecycle_id}}
+        {:resume, thread_id, thread_path} ->
+          {:ok,
+           %{
+             kind: :pm,
+             thread_id: thread_id,
+             thread_path: thread_path,
+             persist?: false,
+             lifecycle_id: lifecycle_id
+           }}
 
         {:new, _reason} ->
           {:ok, %{kind: :pm, thread_id: nil, persist?: true, lifecycle_id: lifecycle_id}}
@@ -246,10 +253,16 @@ defmodule SymphonyElixir.AgentRunner do
     AppServer.start_session(workspace, worker_host: worker_host, role: role_policy.role, role_policy: role_policy)
   end
 
-  defp start_role_session(workspace, worker_host, %{kind: :pm, thread_id: thread_id}, role_policy) do
+  defp start_role_session(
+         workspace,
+         worker_host,
+         %{kind: :pm, thread_id: thread_id, thread_path: thread_path},
+         role_policy
+       ) do
     case AppServer.start_session(workspace,
            worker_host: worker_host,
            thread_id: thread_id,
+           thread_path: thread_path,
            role: role_policy.role,
            role_policy: role_policy
          ) do
@@ -266,7 +279,7 @@ defmodule SymphonyElixir.AgentRunner do
          %{kind: :pm, persist?: true, lifecycle_id: lifecycle_id},
          session
        ) do
-    case PMThreadState.put(issue_id, lifecycle_id, session.thread_id) do
+    case PMThreadState.put(issue_id, lifecycle_id, session.thread_id, thread_path: session.thread_path) do
       :ok ->
         :ok
 

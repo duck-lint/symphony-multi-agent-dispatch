@@ -92,6 +92,8 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert prompt =~ "Stay within the task, handoff, and scope supplied by the host."
       assert prompt =~ "Do not choose or emit next_role."
       assert prompt =~ "Return exactly one strict symphony.role-result/v1 object."
+      assert prompt =~ "outcome must be exactly one of:"
+      assert prompt =~ "Do not invent synonyms such as \"handoff\" or \"done\"."
       assert prompt =~ distinctive_behavior[role]
       refute prompt =~ "Pilot"
     end

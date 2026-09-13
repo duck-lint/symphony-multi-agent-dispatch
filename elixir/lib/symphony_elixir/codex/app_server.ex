@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           thread_sandbox: String.t(),
           turn_sandbox_policy: map(),
           thread_id: String.t(),
+          thread_path: Path.t() | nil,
           workspace: Path.t(),
           worker_host: String.t() | nil,
           dynamic_tool_binding: map(),
@@ -43,6 +44,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
     requested_thread_id = Keyword.get(opts, :thread_id)
+    requested_thread_path = Keyword.get(opts, :thread_path)
     role_policy = Keyword.get(opts, :role_policy)
     dynamic_tool_binding = DynamicTool.bind()
     role_dynamic_tool_binding = effective_dynamic_tool_binding(dynamic_tool_binding, role_policy)
@@ -56,9 +58,10 @@ defmodule SymphonyElixir.Codex.AppServer do
              expanded_workspace,
              session_policies,
              role_dynamic_tool_binding,
-             requested_thread_id
+             requested_thread_id,
+             requested_thread_path
            ) do
-        {:ok, thread_id} ->
+        {:ok, %{thread_id: thread_id, thread_path: thread_path}} ->
           metadata =
             port_metadata(port, worker_host)
             |> maybe_put_authority_snapshot(role_policy)
@@ -75,6 +78,7 @@ defmodule SymphonyElixir.Codex.AppServer do
              thread_sandbox: session_policies.thread_sandbox,
              turn_sandbox_policy: session_policies.turn_sandbox_policy,
              thread_id: thread_id,
+             thread_path: thread_path,
              workspace: expanded_workspace,
              worker_host: worker_host,
              dynamic_tool_binding: role_dynamic_tool_binding,
@@ -381,7 +385,8 @@ defmodule SymphonyElixir.Codex.AppServer do
          workspace,
          session_policies,
          dynamic_tool_binding,
-         requested_thread_id
+         requested_thread_id,
+         requested_thread_path
        ) do
     case send_initialize(port) do
       :ok ->
@@ -390,7 +395,8 @@ defmodule SymphonyElixir.Codex.AppServer do
           workspace,
           session_policies,
           dynamic_tool_binding,
-          requested_thread_id
+          requested_thread_id,
+          requested_thread_path
         )
 
       {:error, reason} ->
@@ -403,7 +409,8 @@ defmodule SymphonyElixir.Codex.AppServer do
          workspace,
          session_policies,
          dynamic_tool_binding,
-         nil
+         nil,
+         _requested_thread_path
        ),
        do: start_thread(port, workspace, session_policies, dynamic_tool_binding)
 
@@ -412,11 +419,12 @@ defmodule SymphonyElixir.Codex.AppServer do
          workspace,
          session_policies,
          _dynamic_tool_binding,
-         thread_id
+         thread_id,
+         thread_path
        )
        when is_binary(thread_id) do
     if valid_requested_thread_id?(thread_id) do
-      resume_thread(port, workspace, session_policies, String.trim(thread_id))
+      resume_thread(port, workspace, session_policies, String.trim(thread_id), thread_path)
     else
       {:error, :invalid_thread_id}
     end
@@ -427,7 +435,8 @@ defmodule SymphonyElixir.Codex.AppServer do
          _workspace,
          _session_policies,
          _dynamic_tool_binding,
-         _thread_id
+         _thread_id,
+         _thread_path
        ),
        do: {:error, :invalid_thread_id}
 
@@ -456,8 +465,11 @@ defmodule SymphonyElixir.Codex.AppServer do
     case await_response(port, @thread_start_id) do
       {:ok, %{"thread" => thread_payload}} ->
         case thread_payload do
-          %{"id" => thread_id} -> {:ok, thread_id}
-          _ -> {:error, {:invalid_thread_payload, thread_payload}}
+          %{"id" => thread_id} when is_binary(thread_id) and thread_id != "" ->
+            {:ok, %{thread_id: thread_id, thread_path: thread_path(thread_payload)}}
+
+          _ ->
+            {:error, {:invalid_thread_payload, thread_payload}}
         end
 
       other ->
@@ -469,22 +481,27 @@ defmodule SymphonyElixir.Codex.AppServer do
          port,
          workspace,
          %{approval_policy: approval_policy, thread_sandbox: thread_sandbox},
-         thread_id
+         thread_id,
+         requested_thread_path
        ) do
-    send_message(port, %{
-      "method" => "thread/resume",
-      "id" => @thread_resume_id,
-      "params" => %{
+    params =
+      %{
         "threadId" => thread_id,
         "approvalPolicy" => approval_policy,
         "sandbox" => thread_sandbox,
         "cwd" => workspace
       }
+      |> maybe_put_thread_path(requested_thread_path)
+
+    send_message(port, %{
+      "method" => "thread/resume",
+      "id" => @thread_resume_id,
+      "params" => params
     })
 
     case await_response(port, @thread_resume_id) do
-      {:ok, %{"thread" => %{"id" => ^thread_id}}} ->
-        {:ok, thread_id}
+      {:ok, %{"thread" => %{"id" => ^thread_id} = thread_payload}} ->
+        {:ok, %{thread_id: thread_id, thread_path: thread_path(thread_payload)}}
 
       {:ok, %{"thread" => %{"id" => resumed_thread_id}}} ->
         {:error, {:thread_resume_id_mismatch, thread_id, resumed_thread_id}}
@@ -496,6 +513,15 @@ defmodule SymphonyElixir.Codex.AppServer do
         other
     end
   end
+
+  defp thread_path(%{"path" => path}) when is_binary(path) and path != "", do: path
+  defp thread_path(_thread_payload), do: nil
+
+  defp maybe_put_thread_path(params, path) when is_binary(path) and path != "" do
+    Map.put(params, "path", path)
+  end
+
+  defp maybe_put_thread_path(params, _path), do: params
 
   defp start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
     send_message(port, %{

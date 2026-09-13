@@ -23,7 +23,7 @@ defmodule SymphonyElixir.PromptBuilder do
     Role instructions:
     #{String.trim(profile.instructions)}
 
-    #{RoleProfiles.result_contract_instructions()}
+    #{RoleProfiles.result_contract_instructions(profile.role)}
 
     Host-supplied handoff/context:
     #{format_context(handoff)}

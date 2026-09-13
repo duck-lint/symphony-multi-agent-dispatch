@@ -1,10 +1,13 @@
 defmodule SymphonyElixir.MixProject do
   use Mix.Project
 
+  @base_version "0.0.2"
+  @build_revision_env "SYMPHONY_BUILD_REVISION"
+
   def project do
     [
       app: :symphony_elixir,
-      version: "0.0.2",
+      version: build_version(),
       elixir: "~> 1.19",
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
@@ -121,5 +124,23 @@ defmodule SymphonyElixir.MixProject do
         ]
       ]
     ]
+  end
+
+  defp build_version do
+    case System.get_env(@build_revision_env) do
+      nil ->
+        if Mix.env() == :prod do
+          raise "#{@build_revision_env} must be set for production builds"
+        else
+          @base_version
+        end
+
+      revision ->
+        if Regex.match?(~r/\A[0-9a-f]{40}\z/, revision) do
+          "#{@base_version}-git.#{revision}"
+        else
+          raise "#{@build_revision_env} must be a 40-character lowercase Git commit SHA, got: #{inspect(revision)}"
+        end
+    end
   end
 end

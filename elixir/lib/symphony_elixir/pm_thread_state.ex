@@ -10,7 +10,8 @@ defmodule SymphonyElixir.PMThreadState do
   alias SymphonyElixir.{Config, InstanceConfig}
 
   @schema "symphony.pm-thread/v1"
-  @allowed_keys ["schema", "lifecycle_id", "thread_id"]
+  @required_keys ["schema", "lifecycle_id", "thread_id"]
+  @allowed_keys ["schema", "lifecycle_id", "thread_id", "thread_path"]
   @app_name "symphony"
   @state_subdirectory "pm_threads"
 
@@ -23,7 +24,7 @@ defmodule SymphonyElixir.PMThreadState do
   def schema, do: @schema
 
   @spec resolve(String.t(), String.t(), :initial | :returning) ::
-          {:resume, String.t()} | {:new, term()} | {:error, term()}
+          {:resume, String.t(), String.t() | nil} | {:new, term()} | {:error, term()}
   def resolve(issue_id, lifecycle_id, phase)
       when is_binary(issue_id) and is_binary(lifecycle_id) and phase in [:initial, :returning] do
     resolve_loaded_state(load(issue_id), lifecycle_id, phase)
@@ -35,8 +36,12 @@ defmodule SymphonyElixir.PMThreadState do
   defp resolve_loaded_state(:missing, _lifecycle_id, :initial), do: {:new, :missing}
   defp resolve_loaded_state(:missing, _lifecycle_id, :returning), do: {:error, :pm_thread_state_missing}
 
-  defp resolve_loaded_state({:ok, %{"lifecycle_id" => lifecycle_id, "thread_id" => thread_id}}, lifecycle_id, _phase),
-    do: {:resume, thread_id}
+  defp resolve_loaded_state(
+         {:ok, %{"lifecycle_id" => lifecycle_id, "thread_id" => thread_id} = record},
+         lifecycle_id,
+         _phase
+       ),
+       do: {:resume, thread_id, Map.get(record, "thread_path")}
 
   defp resolve_loaded_state({:ok, %{"lifecycle_id" => old_lifecycle_id}}, _lifecycle_id, :initial),
     do: {:new, {:stale_lifecycle, old_lifecycle_id}}
@@ -75,11 +80,13 @@ defmodule SymphonyElixir.PMThreadState do
          :ok <- validate_identifier(thread_id, :thread_id),
          {:ok, path} <- path_for_issue(issue_id, opts),
          :ok <- File.mkdir_p(Path.dirname(path)) do
-      record = %{
-        "schema" => @schema,
-        "lifecycle_id" => lifecycle_id,
-        "thread_id" => thread_id
-      }
+      record =
+        %{
+          "schema" => @schema,
+          "lifecycle_id" => lifecycle_id,
+          "thread_id" => thread_id
+        }
+        |> maybe_put_thread_path(Keyword.get(opts, :thread_path))
 
       atomic_write(path, Jason.encode!(record))
     end
@@ -110,7 +117,7 @@ defmodule SymphonyElixir.PMThreadState do
 
   defp validate_record(record) do
     keys = Map.keys(record)
-    missing = @allowed_keys -- keys
+    missing = @required_keys -- keys
     unknown = keys -- @allowed_keys
 
     cond do
@@ -124,8 +131,9 @@ defmodule SymphonyElixir.PMThreadState do
         {:error, {:invalid_schema, record["schema"]}}
 
       true ->
-        with :ok <- validate_identifier(record["lifecycle_id"], :lifecycle_id) do
-          validate_identifier(record["thread_id"], :thread_id)
+        with :ok <- validate_identifier(record["lifecycle_id"], :lifecycle_id),
+             :ok <- validate_identifier(record["thread_id"], :thread_id) do
+          validate_optional_thread_path(record)
         end
     end
   end
@@ -217,4 +225,23 @@ defmodule SymphonyElixir.PMThreadState do
         {:error, {:pm_thread_state_write_failed, temporary_path, reason}}
     end
   end
+
+  defp maybe_put_thread_path(record, path) when is_binary(path) do
+    if String.trim(path) != "" do
+      Map.put(record, "thread_path", path)
+    else
+      record
+    end
+  end
+
+  defp maybe_put_thread_path(record, _path), do: record
+
+  defp validate_optional_thread_path(%{"thread_path" => path}) when is_binary(path) do
+    validate_identifier(path, :thread_path)
+  end
+
+  defp validate_optional_thread_path(%{"thread_path" => _path}),
+    do: {:error, {:invalid_identifier, :thread_path}}
+
+  defp validate_optional_thread_path(_record), do: :ok
 end
