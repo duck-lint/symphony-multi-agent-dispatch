@@ -714,14 +714,46 @@ defmodule SymphonyElixir.LifecycleCoordinator do
         _ -> :blocked
       end
 
-    case target do
-      :awaiting_human ->
-        project_labels(issue, {:awaiting_human, issue})
+    if terminal_projection_is_current?(issue, target) do
+      :ok
+    else
+      case target do
+        :awaiting_human ->
+          project_labels(issue, {:awaiting_human, issue})
 
-      _ ->
-        project_labels(issue, {:terminal, target})
+        _ ->
+          project_labels(issue, {:terminal, target})
+      end
     end
   end
+
+  defp terminal_projection_is_current?(issue, :awaiting_human) do
+    has_label?(issue.labels, @awaiting_human_label) and
+      not has_label?(issue.labels, @auto_label) and
+      match?({:ok, _role}, RoleRouter.role_for_issue(issue)) and
+      exactly_one_state_label?(issue.labels)
+  end
+
+  defp terminal_projection_is_current?(issue, terminal)
+       when terminal in [:lifecycle_complete, :non_converged, :blocked] do
+    expected =
+      case terminal do
+        :lifecycle_complete -> @lifecycle_complete_label
+        :non_converged -> @non_converged_label
+        :blocked -> @blocked_label
+      end
+
+    has_label?(issue.labels, expected) and
+      not has_label?(issue.labels, @auto_label) and
+      RoleRouter.role_for_issue(issue) == {:error, :missing_role_label} and
+      exactly_one_state_label?(issue.labels)
+  end
+
+  defp exactly_one_state_label?(labels) when is_list(labels) do
+    Enum.count(labels, &state_label?/1) == 1
+  end
+
+  defp exactly_one_state_label?(_labels), do: false
 
   defp projected_history_after(%{idempotent?: true}, history), do: {:ok, history}
 

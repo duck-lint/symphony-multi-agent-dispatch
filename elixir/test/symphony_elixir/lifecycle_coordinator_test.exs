@@ -118,6 +118,44 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     refute "symphony:auto" in state.issue.labels
   end
 
+  test "an already-correct terminal projection is read-only" do
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{
+        state
+        | issue: %{state.issue | labels: ["symphony:state:lifecycle-complete", "human-label"]},
+          comments: terminal_lifecycle_comments()
+      }
+    end)
+
+    assert {:skip, {:terminal_lifecycle, "lifecycle_complete"}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    state = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+    assert state.trace == []
+  end
+
+  test "terminal projection drift is repaired" do
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{
+        state
+        | issue: %{state.issue | labels: ["symphony:state:non-converged", "human-label"]},
+          comments: terminal_lifecycle_comments()
+      }
+    end)
+
+    assert {:skip, {:terminal_lifecycle, "lifecycle_complete"}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    state = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+
+    assert state.trace == [
+             {:remove, "symphony:state:non-converged"},
+             {:add, "symphony:state:lifecycle-complete"}
+           ]
+
+    assert state.issue.labels == ["human-label", "symphony:state:lifecycle-complete"]
+  end
+
   test "blocks PM continuity without consuming lifecycle state" do
     issue = github_issue()
 
@@ -182,5 +220,51 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       "evidence" => ["host test evidence"],
       "findings" => []
     }
+  end
+
+  defp terminal_lifecycle_comments do
+    lifecycle_id = "life-terminal"
+
+    events = [
+      LifecycleHistory.start_event(lifecycle_id),
+      transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1),
+      transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1),
+      transition_event(lifecycle_id, "REVIEWER", "accept", "IMPLEMENTER", 1, 1),
+      transition_event(lifecycle_id, "IMPLEMENTER", "implementation_complete", "ADVERSARY", 1, 1),
+      transition_event(lifecycle_id, "ADVERSARY", "review_complete", "PM", 1, 1),
+      transition_event(lifecycle_id, "PM", "converge", "ARCHIVIST", 1, 1),
+      terminal_event(lifecycle_id, "ARCHIVIST", "archive_complete", "LIFECYCLE_COMPLETE", 1, 1)
+    ]
+
+    Enum.map(events, &%{"body" => LifecycleHistory.render(&1, "lifecycle test")})
+  end
+
+  defp transition_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt) do
+    %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "transition",
+      "lifecycle_id" => lifecycle_id,
+      "transition_id" =>
+        LifecycleHistory.transition_id(
+          lifecycle_id,
+          round,
+          planning_attempt,
+          String.downcase(from_role) |> String.to_atom(),
+          outcome
+        ),
+      "from_role" => from_role,
+      "outcome" => outcome,
+      "to_role" => to_role,
+      "round" => round,
+      "planning_attempt" => planning_attempt,
+      "summary" => "bounded result",
+      "evidence" => ["evidence"],
+      "findings" => []
+    }
+  end
+
+  defp terminal_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt) do
+    transition_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt)
+    |> Map.put("kind", "terminal")
   end
 end
