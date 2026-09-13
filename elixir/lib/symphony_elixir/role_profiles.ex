@@ -191,14 +191,24 @@ defmodule SymphonyElixir.RoleProfiles do
   @spec result_contract_instructions(role()) :: String.t()
   def result_contract_instructions(role) when is_map_key(@profiles, role) do
     allowed_outcomes = role |> allowed_outcomes() |> Enum.join(" | ")
+    role_name = role_name(role)
 
     """
-    Return exactly one JSON object with schema "symphony.role-result/v1" and these fields:
-    role (the assigned uppercase role), outcome, summary, evidence (a list of bounded strings),
-    findings (a list of {severity, summary, evidence} objects), and optional human_question.
-    For this #{role_name(role)} role, outcome must be exactly one of: #{allowed_outcomes}.
-    Do not invent synonyms such as "handoff" or "done". Findings may use only "blocking" or
-    "advisory" severity. Do not emit next_role; the host owns all routing decisions.
+    Return exactly one JSON object and no Markdown or surrounding prose. It must contain these
+    required top-level keys and no other keys unless the human_question rule below permits it:
+    "schema", "role", "outcome", "summary", "evidence", and "findings".
+    "schema" must be exactly "symphony.role-result/v1". "role" must be exactly "#{role_name}"
+    (one of PM, PLANNER, REVIEWER, IMPLEMENTER, ADVERSARY, or ARCHIVIST). For this #{role_name}
+    role, "outcome" must be exactly one of: #{allowed_outcomes}. Do not invent synonyms such as "handoff" or "done".
+    "summary" must be a non-empty JSON string of at most 4,000 characters. "evidence" must be a
+    JSON array; every item must be a non-empty JSON string (the array may be empty).
+    "findings" must be a JSON array; every item must be an object with exactly these keys:
+    "severity", "summary", and "evidence". Do not add keys to a finding. "severity" must be
+    exactly the JSON string "blocking" or "advisory". Finding "summary" must be a non-empty
+    JSON string. Finding "evidence" must be a JSON array of non-empty JSON strings (it may be
+    empty). Do not emit next_role or any other unknown field; the host owns all routing decisions.
+    Include "human_question" only when outcome is "await_human", and then it must be a non-empty
+    JSON string. For every other outcome, omit "human_question" or set it to JSON null.
     """
   end
 end

@@ -92,8 +92,17 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert prompt =~ "Stay within the task, handoff, and scope supplied by the host."
       assert prompt =~ "Do not choose or emit next_role."
       assert prompt =~ "Return exactly one strict symphony.role-result/v1 object."
-      assert prompt =~ "outcome must be exactly one of:"
+      assert prompt =~ "\"outcome\" must be exactly one of:"
       assert prompt =~ "Do not invent synonyms such as \"handoff\" or \"done\"."
+      assert prompt =~ "required top-level keys and no other keys"
+      assert prompt =~ "role\" must be exactly \"#{RoleProfiles.role_name(role)}\""
+      assert prompt =~ "summary\" must be a non-empty JSON string of at most 4,000 characters"
+      assert prompt =~ "evidence\" must be a JSON array"
+      assert prompt =~ "findings\" must be a JSON array"
+      assert prompt =~ "exactly these keys:"
+      assert prompt =~ "Finding \"evidence\" must be a JSON array of non-empty JSON strings"
+      assert prompt =~ "Include \"human_question\" only when outcome is \"await_human\""
+      assert prompt =~ "omit \"human_question\" or set it to JSON null"
       assert prompt =~ distinctive_behavior[role]
       refute prompt =~ "Pilot"
     end
@@ -284,6 +293,45 @@ defmodule SymphonyElixir.RoleKernelTest do
                Jason.encode!(valid_result("IMPLEMENTER", "implementation_complete")),
                :reviewer
              )
+  end
+
+  test "orchestrator retries a rejected role result as a role contract failure" do
+    issue = %Issue{id: "issue-contract", identifier: "MT-CONTRACT", url: "https://example.test/issue-contract"}
+    ref = make_ref()
+
+    running_entry = %{
+      ref: ref,
+      pid: self(),
+      identifier: issue.identifier,
+      issue: issue,
+      role: :reviewer,
+      retry_attempt: 0,
+      worker_host: nil,
+      workspace_path: nil,
+      session_id: "session-contract",
+      started_at: DateTime.utc_now()
+    }
+
+    state = %Orchestrator.State{
+      running: %{issue.id => running_entry},
+      claimed: MapSet.new([issue.id]),
+      retry_attempts: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    {:noreply, state} =
+      Orchestrator.handle_info(
+        {:role_execution_failed, issue.id, %{kind: :role_result_contract, role: :reviewer, reason: {:invalid_role_result, :invalid_finding_evidence}}},
+        state
+      )
+
+    assert state.running[issue.id].role_execution_failure.kind == :role_result_contract
+
+    {:noreply, state} = Orchestrator.handle_info({:DOWN, ref, :process, self(), :normal}, state)
+    assert state.running == %{}
+    assert %{error: error, timer_ref: timer_ref} = state.retry_attempts[issue.id]
+    assert error =~ "role result contract rejected"
+    Process.cancel_timer(timer_ref)
   end
 
   test "finding severity, human question, and transition result validation are bounded" do

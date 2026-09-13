@@ -1602,6 +1602,11 @@ defmodule SymphonyElixir.CoreTest do
         AgentRunner.run(issue, self(), role: :reviewer)
       end
 
+      assert_receive {:role_execution_failed, "issue-invalid-result", failure}
+      assert failure.kind == :role_result_contract
+      assert failure.role == :reviewer
+      assert {:invalid_role_result, {:role_result_json_decode_error, _}} = failure.reason
+
       refute_receive {:role_execution_completed, "issue-invalid-result", _completion}
     after
       File.rm_rf(test_root)

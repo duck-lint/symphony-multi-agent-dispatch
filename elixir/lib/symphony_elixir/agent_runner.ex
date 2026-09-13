@@ -41,6 +41,18 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.error("PM thread continuity failed for #{issue_context(issue)}: #{inspect(reason)}")
         raise RuntimeError, "PM thread continuity failed for #{issue_context(issue)}: #{inspect(reason)}"
 
+      {:error, {:role_result_contract, role, reason}} ->
+        failure = {:invalid_role_result, reason}
+        send_role_result_failure(codex_update_recipient, issue, role, failure)
+
+        Logger.error(
+          "Role result contract failed for #{issue_context(issue)} role=#{RoleProfiles.role_name(role)}: " <>
+            "#{inspect(failure)}"
+        )
+
+        raise RuntimeError,
+              "Role result contract failed for #{issue_context(issue)} role=#{RoleProfiles.role_name(role)}: #{inspect(failure)}"
+
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
         raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
@@ -208,7 +220,7 @@ defmodule SymphonyElixir.AgentRunner do
           {:error, reason} ->
             Logger.warning("Invalid #{RoleProfiles.role_name(role)} role result for #{issue_context(issue)}: #{inspect(reason)}")
 
-            {:error, {:invalid_role_result, reason}}
+            {:error, {:role_result_contract, role, reason}}
         end
 
       {:error, reason} ->
@@ -309,6 +321,16 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_pm_continuity_failure(_recipient, _issue, _reason), do: :ok
+
+  defp send_role_result_failure(recipient, %Issue{id: issue_id}, role, reason)
+       when is_pid(recipient) and is_binary(issue_id) do
+    send(
+      recipient,
+      {:role_execution_failed, issue_id, %{kind: :role_result_contract, role: role, reason: reason}}
+    )
+  end
+
+  defp send_role_result_failure(_recipient, _issue, _role, _reason), do: :ok
 
   defp send_role_execution_completed(
          recipient,

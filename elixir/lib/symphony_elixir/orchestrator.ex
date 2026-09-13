@@ -219,10 +219,10 @@ defmodule SymphonyElixir.Orchestrator do
   def handle_info({:role_execution_completed, _issue_id, _completion}, state), do: {:noreply, state}
 
   def handle_info(
-        {:role_execution_failed, issue_id, %{kind: :pm_continuity} = failure},
+        {:role_execution_failed, issue_id, failure},
         %{running: running} = state
       )
-      when is_binary(issue_id) do
+      when is_binary(issue_id) and is_map(failure) do
     case Map.get(running, issue_id) do
       nil ->
         {:noreply, state}
@@ -291,6 +291,16 @@ defmodule SymphonyElixir.Orchestrator do
       %{kind: :pm_continuity, reason: continuity_reason} ->
         block_pm_continuity(state, issue_id, running_entry, continuity_reason)
 
+      %{kind: :role_result_contract, role: role, reason: contract_reason} ->
+        retry_role_result_contract(
+          state,
+          issue_id,
+          running_entry,
+          session_id,
+          role,
+          contract_reason
+        )
+
       _ ->
         handle_agent_down_without_continuity_failure(reason, state, issue_id, running_entry, session_id)
     end
@@ -349,6 +359,23 @@ defmodule SymphonyElixir.Orchestrator do
       identifier: running_entry.identifier,
       issue_url: running_entry.issue.url,
       error: "agent exited: #{inspect(reason)}",
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path)
+    })
+  end
+
+  defp retry_role_result_contract(state, issue_id, running_entry, session_id, role, reason) do
+    Logger.warning(
+      "Role result contract rejected for issue_id=#{issue_id} role=#{role} session_id=#{session_id}; " <>
+        "rerunning the same lifecycle role: #{inspect(reason)}"
+    )
+
+    next_attempt = next_retry_attempt_from_running(running_entry)
+
+    schedule_issue_retry(state, issue_id, next_attempt, %{
+      identifier: running_entry.identifier,
+      issue_url: running_entry.issue.url,
+      error: "role result contract rejected: #{inspect(reason)}",
       worker_host: Map.get(running_entry, :worker_host),
       workspace_path: Map.get(running_entry, :workspace_path)
     })
