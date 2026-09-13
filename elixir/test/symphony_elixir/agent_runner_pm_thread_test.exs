@@ -88,7 +88,51 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
 
       trace = File.read!(trace_path)
       refute trace =~ "\"method\":\"thread/start\""
-      assert trace =~ "\"threadId\":\"thread-pm-existing\""
+      assert_request_methods(trace, ["initialize", "initialized", "thread/resume", "turn/start"])
+
+      resume_request =
+        trace
+        |> String.split("\n", trim: true)
+        |> Enum.map(&Jason.decode!/1)
+        |> Enum.find(&(&1["method"] == "thread/resume"))
+
+      assert resume_request["params"]["threadId"] == "thread-pm-existing"
+      assert resume_request["params"]["sandbox"] == "read-only"
+      assert is_map(resume_request["params"]["approvalPolicy"])
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "unavailable returning PM thread is surfaced as a continuity failure" do
+    test_root = test_root("returning-unavailable")
+    workspace_root = Path.join(test_root, "workspaces")
+    codex_binary = Path.join(test_root, "fake-codex")
+    issue = issue("issue-pm-unavailable", "MT-PM-UNAVAILABLE")
+
+    try do
+      File.mkdir_p!(workspace_root)
+
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      assert :ok = PMThreadState.put(issue.id, "life-1", "thread-pm-missing")
+      trace_path = Path.join(test_root, "codex.trace")
+      write_pm_fixture!(codex_binary, trace_path, :reuse_failure, "thread-pm-missing")
+
+      assert_raise RuntimeError, ~r/PM thread continuity failed/, fn ->
+        AgentRunner.run(issue, self(),
+          role: :pm,
+          lifecycle_id: "life-1",
+          pm_phase: :returning
+        )
+      end
+
+      assert_receive {:role_execution_failed, "issue-pm-unavailable", failure}
+      assert failure.kind == :pm_continuity
+      assert failure.reason == {:required_thread_unavailable, {:response_error, %{"code" => -32_600, "message" => "thread not found"}}}
     after
       File.rm_rf(test_root)
     end
@@ -126,7 +170,7 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
         :fresh ->
           {Path.join(Path.dirname(path), "codex.trace"), state_or_trace_path}
 
-        :reuse ->
+        mode when mode in [:reuse, :reuse_failure] ->
           {state_or_trace_path, nil}
       end
 
@@ -156,10 +200,19 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
 
         :reuse ->
           """
-          3)
+          3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"#{thread_id}"}}}' ;;
+          4)
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-pm"}}}'
             printf '%s\\n' '#{result_message}'
             printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          """
+
+        :reuse_failure ->
+          """
+          3)
+            printf '%s\\n' '{"id":2,"error":{"code":-32600,"message":"thread not found"}}'
             exit 0
             ;;
           """
@@ -236,6 +289,16 @@ defmodule SymphonyElixir.AgentRunnerPMThreadTest do
       url: "https://example.org/issues/#{identifier}",
       labels: ["symphony:role:pm"]
     }
+  end
+
+  defp assert_request_methods(trace, expected_methods) do
+    methods =
+      trace
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+      |> Enum.map(&Map.get(&1, "method"))
+
+    assert methods == expected_methods
   end
 
   defp test_root(name) do

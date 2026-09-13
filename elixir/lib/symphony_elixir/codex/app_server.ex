@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   @initialize_id 1
   @thread_start_id 2
+  @thread_resume_id 2
   @turn_start_id 3
   @port_line_bytes 1_048_576
   @max_stream_log_bytes 1_000
@@ -407,15 +408,15 @@ defmodule SymphonyElixir.Codex.AppServer do
        do: start_thread(port, workspace, session_policies, dynamic_tool_binding)
 
   defp start_or_reuse_thread(
-         _port,
-         _workspace,
-         _session_policies,
+         port,
+         workspace,
+         session_policies,
          _dynamic_tool_binding,
          thread_id
        )
        when is_binary(thread_id) do
     if valid_requested_thread_id?(thread_id) do
-      {:ok, String.trim(thread_id)}
+      resume_thread(port, workspace, session_policies, String.trim(thread_id))
     else
       {:error, :invalid_thread_id}
     end
@@ -458,6 +459,38 @@ defmodule SymphonyElixir.Codex.AppServer do
           %{"id" => thread_id} -> {:ok, thread_id}
           _ -> {:error, {:invalid_thread_payload, thread_payload}}
         end
+
+      other ->
+        other
+    end
+  end
+
+  defp resume_thread(
+         port,
+         workspace,
+         %{approval_policy: approval_policy, thread_sandbox: thread_sandbox},
+         thread_id
+       ) do
+    send_message(port, %{
+      "method" => "thread/resume",
+      "id" => @thread_resume_id,
+      "params" => %{
+        "threadId" => thread_id,
+        "approvalPolicy" => approval_policy,
+        "sandbox" => thread_sandbox,
+        "cwd" => workspace
+      }
+    })
+
+    case await_response(port, @thread_resume_id) do
+      {:ok, %{"thread" => %{"id" => ^thread_id}}} ->
+        {:ok, thread_id}
+
+      {:ok, %{"thread" => %{"id" => resumed_thread_id}}} ->
+        {:error, {:thread_resume_id_mismatch, thread_id, resumed_thread_id}}
+
+      {:ok, %{"thread" => thread_payload}} ->
+        {:error, {:invalid_thread_payload, thread_payload}}
 
       other ->
         other

@@ -22,15 +22,20 @@ defmodule SymphonyElixir.AppServerTest do
     assert result.thread_id == "thread-fresh"
   end
 
-  test "app server reuses a requested thread without starting a replacement" do
+  test "app server resumes a requested thread without starting a replacement" do
     assert {:ok, result} = run_thread_selection_fixture!(:reuse)
     assert result.thread_id == "thread-existing"
     assert result.assistant_text == "assistant output"
   end
 
-  test "app server surfaces a rejected requested thread without falling back" do
-    assert {:error, {:turn_start_failed, {:response_error, _}}} =
+  test "app server surfaces a rejected thread resume without falling back" do
+    assert {:error, {:response_error, _}} =
              run_thread_selection_fixture!(:reuse_failure)
+  end
+
+  test "app server rejects a resumed thread id that differs from the requested id" do
+    assert {:error, {:thread_resume_id_mismatch, "thread-existing", "thread-other"}} =
+             run_thread_selection_fixture!(:reuse_mismatch)
   end
 
   test "app server rejects the workspace root and paths outside workspace root" do
@@ -1745,7 +1750,7 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
-  defp run_thread_selection_fixture!(mode) when mode in [:fresh, :reuse, :reuse_failure] do
+  defp run_thread_selection_fixture!(mode) when mode in [:fresh, :reuse, :reuse_failure, :reuse_mismatch] do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1795,7 +1800,7 @@ defmodule SymphonyElixir.AppServerTest do
     opts =
       case mode do
         :fresh -> []
-        mode when mode in [:reuse, :reuse_failure] -> [thread_id: "thread-existing"]
+        mode when mode in [:reuse, :reuse_failure, :reuse_mismatch] -> [thread_id: "thread-existing"]
       end
 
     try do
@@ -1807,12 +1812,12 @@ defmodule SymphonyElixir.AppServerTest do
           assert requests =~ "\"method\":\"thread/start\""
 
         :reuse ->
-          refute requests =~ "\"method\":\"thread/start\""
+          assert_request_methods(requests, ["initialize", "initialized", "thread/resume", "turn/start"])
           assert requests =~ "\"threadId\":\"thread-existing\""
 
-        :reuse_failure ->
+        mode when mode in [:reuse_failure, :reuse_mismatch] ->
+          assert_request_methods(requests, ["initialize", "initialized", "thread/resume"])
           refute requests =~ "\"method\":\"thread/start\""
-          assert requests =~ "\"threadId\":\"thread-existing\""
       end
 
       result
@@ -1835,7 +1840,8 @@ defmodule SymphonyElixir.AppServerTest do
 
   defp thread_selection_script(:reuse) do
     """
-    3)
+    3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-existing"}}}' ;;
+    4)
       printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-existing"}}}'
       printf '%s\\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"assistant output"}}}'
       printf '%s\\n' '{"method":"turn/completed"}'
@@ -1846,10 +1852,27 @@ defmodule SymphonyElixir.AppServerTest do
 
   defp thread_selection_script(:reuse_failure) do
     """
-    3)
-      printf '%s\\n' '{"id":3,"error":{"message":"thread not found"}}'
+    3) printf '%s\\n' '{"id":2,"error":{"code":-32600,"message":"thread not found"}}'
       exit 0
       ;;
     """
+  end
+
+  defp thread_selection_script(:reuse_mismatch) do
+    """
+    3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-other"}}}'
+      exit 0
+      ;;
+    """
+  end
+
+  defp assert_request_methods(requests, expected_methods) do
+    methods =
+      requests
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+      |> Enum.map(&Map.get(&1, "method"))
+
+    assert methods == expected_methods
   end
 end
