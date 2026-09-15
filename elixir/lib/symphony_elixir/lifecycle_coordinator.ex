@@ -157,7 +157,9 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp event_material_matches_result?(event, result) do
-    Enum.all?(["summary", "evidence", "findings"], fn key -> event[key] == result[key] end) and
+    event["role"] == result["role"] and
+      event["role_result_schema"] == result["schema"] and
+      Enum.all?(["summary", "evidence", "findings"], fn key -> event[key] == result[key] end) and
       Map.get(event, "human_question") == Map.get(result, "human_question") and
       (event["kind"] != "terminal" or
          event["terminal_reason"] == expected_terminal_reason(result))
@@ -183,11 +185,13 @@ defmodule SymphonyElixir.LifecycleCoordinator do
          round: event["round"],
          planning_attempt: event["planning_attempt"],
          result: %{
-           "role" => from_role,
+           "schema" => event["role_result_schema"],
+           "role" => event["role"],
            "outcome" => outcome,
            "summary" => event["summary"],
            "evidence" => event["evidence"],
-           "findings" => event["findings"]
+           "findings" => event["findings"],
+           "human_question" => event["human_question"]
          }
        }}
     end
@@ -217,7 +221,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       pm_phase: history.pm_phase,
       completed_working_round?: history.completed_working_round?,
       preceding_adversary_findings: history.preceding_adversary_findings,
-      accepted_events: Enum.map(handoff_events, &Map.delete(&1, "_human_summary"))
+      accepted_events: handoff_events
     }
   end
 
@@ -336,7 +340,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     else
       lifecycle_id = new_lifecycle_id()
       event = LifecycleHistory.start_event(lifecycle_id)
-      body = LifecycleHistory.render(event, "SYMPHONY lifecycle started.")
+      body = LifecycleHistory.render(event)
 
       with {:ok, _comment} <- github_client().append_issue_comment(issue.id, body),
            {:ok, projected_issue} <- project_and_verify(issue, %{kind: "transition", to_role: :pm}),
@@ -460,16 +464,14 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
     case Enum.find(history.events, &(&1["transition_id"] == transition_id)) do
       nil ->
-        body = LifecycleHistory.render(event, human_summary(event))
+        body = LifecycleHistory.render(event)
 
         with {:ok, _comment} <- github_client().append_issue_comment(issue.id, body) do
           {:ok, %{event: event, idempotent?: false}}
         end
 
       existing ->
-        material_existing = Map.delete(existing, "_human_summary")
-
-        if material_existing == event do
+        if existing == event do
           {:ok, %{event: event, idempotent?: true}}
         else
           {:error, {:conflicting_transition, transition_id}}
@@ -487,6 +489,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       "schema" => LifecycleHistory.schema(),
       "kind" => transition.kind,
       "lifecycle_id" => history.lifecycle_id,
+      "role_result_schema" => result["schema"],
       "transition_id" =>
         LifecycleHistory.transition_id(
           history.lifecycle_id,
@@ -495,6 +498,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
           elem(canonical_role(role), 1),
           outcome
         ),
+      "role" => role,
       "from_role" => role,
       "outcome" => outcome,
       "to_role" => event_target(to_role),
@@ -505,23 +509,16 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       "findings" => result["findings"]
     }
 
-    payload
-    |> maybe_put("human_question", result["human_question"])
-    |> maybe_put("terminal_reason", transition[:terminal_reason])
+    Map.merge(payload, %{
+      "human_question" => Map.get(result, "human_question"),
+      "terminal_reason" => Map.get(transition, :terminal_reason)
+    })
   end
 
   defp event_target(:await_human), do: "AWAITING_HUMAN"
   defp event_target(:lifecycle_complete), do: "LIFECYCLE_COMPLETE"
   defp event_target(:non_converged), do: "NON_CONVERGED"
   defp event_target(role), do: RoleProfiles.role_name(role)
-
-  defp human_summary(%{"kind" => "escalation"}), do: "SYMPHONY lifecycle is awaiting human input."
-  defp human_summary(%{"kind" => "terminal", "to_role" => "LIFECYCLE_COMPLETE"}), do: "SYMPHONY lifecycle completed."
-  defp human_summary(%{"kind" => "terminal", "to_role" => "NON_CONVERGED"}), do: "SYMPHONY lifecycle reached its convergence budget."
-  defp human_summary(%{"summary" => summary}), do: "SYMPHONY transition: #{summary}"
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp project_and_verify(issue, transition) do
     target =

@@ -3,8 +3,8 @@ defmodule SymphonyElixir.LifecycleHistory do
   Pure parser and projection for host-written GitHub lifecycle comments.
 
   Ordinary GitHub comments are deliberately invisible here. A comment becomes
-  lifecycle history only when it carries the exact host-owned marker and a
-  valid JSON payload.
+  lifecycle history only when it is the exact visible JSON ledger emitted by
+  `render/1` and contains a valid lifecycle event.
   """
 
   alias SymphonyElixir.{Lifecycle, RoleProfiles}
@@ -58,16 +58,13 @@ defmodule SymphonyElixir.LifecycleHistory do
   end
 
   defp parse_comment_body(body) do
-    case Regex.run(
-           ~r/\A<!--\s*symphony\.lifecycle\/v1\s*\r?\n(?<payload>\{.*\})\r?\n-->(?:\r?\n(?<summary>.*))?\z/s,
-           body,
-           capture: :all_names
-         ) do
-      [payload, summary] ->
-        decode_event(payload, summary)
+    case Regex.run(~r/\A```json\r?\n(?<payload>\{.*\})\r?\n```\r?\n?\z/s, body, capture: :all_names) do
+      [payload] ->
+        decode_event(payload)
 
       nil ->
-        if String.starts_with?(String.trim_leading(body), "<!-- symphony.lifecycle/v1") do
+        if String.starts_with?(String.trim_leading(body), "```json") or
+             String.starts_with?(String.trim_leading(body), "<!-- symphony.lifecycle/v1") do
           {:error, :malformed_lifecycle_comment}
         else
           :ignore
@@ -112,9 +109,9 @@ defmodule SymphonyElixir.LifecycleHistory do
     "#{lifecycle_id}:r#{round}:p#{planning_attempt}:#{RoleProfiles.role_name(role)}:#{outcome}"
   end
 
-  @spec render(event(), String.t()) :: String.t()
-  def render(event, summary) when is_map(event) and is_binary(summary) do
-    "<!-- symphony.lifecycle/v1\n#{Jason.encode!(event)}\n-->\n#{String.trim(summary)}\n"
+  @spec render(event()) :: String.t()
+  def render(event) when is_map(event) do
+    "```json\n#{Jason.encode!(event, pretty: true)}\n```\n"
   end
 
   @spec start_event(String.t()) :: event()
@@ -148,9 +145,7 @@ defmodule SymphonyElixir.LifecycleHistory do
         :new
 
       existing ->
-        if Map.delete(existing, "_human_summary") == Map.delete(event, "_human_summary"),
-          do: :duplicate,
-          else: {:conflict, lifecycle_id}
+        if existing == event, do: :duplicate, else: {:conflict, lifecycle_id}
     end
   end
 
@@ -161,9 +156,7 @@ defmodule SymphonyElixir.LifecycleHistory do
         :new
 
       existing ->
-        if Map.delete(existing, "_human_summary") == Map.delete(event, "_human_summary"),
-          do: :duplicate,
-          else: {:conflict, transition_id}
+        if existing == event, do: :duplicate, else: {:conflict, transition_id}
     end
   end
 
@@ -174,20 +167,18 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp comment_body(body) when is_binary(body), do: body
   defp comment_body(_comment), do: nil
 
-  @spec decode_event(String.t(), String.t() | nil) :: {:ok, event()} | {:error, term()}
-  defp decode_event(payload, summary) do
+  @spec decode_event(String.t()) :: {:ok, event()} | {:error, term()}
+  defp decode_event(payload) do
     case Jason.decode(payload) do
       {:ok, event} ->
         with :ok <- validate_event(event) do
-          {:ok, Map.put(event, "_human_summary", human_summary(summary))}
+          {:ok, event}
         end
 
       {:error, reason} ->
         {:error, {:lifecycle_event_json_error, reason}}
     end
   end
-
-  defp human_summary(summary), do: summary |> to_string() |> String.trim()
 
   @spec validate_event(map()) :: :ok | {:error, term()}
   defp validate_event(event) do
@@ -225,16 +216,49 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp validate_kind_fields(%{"kind" => kind} = event) when kind in ["transition", "terminal", "escalation", "blocked"] do
     with :ok <- validate_common_event_fields(event),
          :ok <- validate_event_lists(event) do
-      validate_event_numbers(event)
+      with :ok <- validate_event_numbers(event),
+           :ok <- validate_event_role_result(event) do
+        :ok
+      end
     end
   end
+
+  defp validate_event_role_result(%{"kind" => "blocked"}), do: :ok
+
+  defp validate_event_role_result(event) do
+    if event["role"] == event["from_role"] do
+      result = %{
+        "schema" => event["role_result_schema"],
+        "role" => event["role"],
+        "outcome" => event["outcome"],
+        "summary" => event["summary"],
+        "evidence" => event["evidence"],
+        "findings" => event["findings"],
+        "human_question" => event["human_question"]
+      }
+
+      case Lifecycle.validate_result(result) do
+        {:ok, _validated} -> validate_terminal_reason(event["terminal_reason"])
+        {:error, reason} -> {:error, {:invalid_lifecycle_role_result, reason}}
+      end
+    else
+      {:error, :lifecycle_role_mismatch}
+    end
+  end
+
+  defp validate_terminal_reason(nil), do: :ok
+
+  defp validate_terminal_reason(reason) when is_binary(reason) do
+    if String.trim(reason) == "", do: {:error, :invalid_lifecycle_terminal_reason}, else: :ok
+  end
+
+  defp validate_terminal_reason(_reason), do: {:error, :invalid_lifecycle_terminal_reason}
 
   defp validate_common_event_fields(event) do
     required =
       case event["kind"] do
-        "transition" -> ~w(transition_id from_role outcome to_role round planning_attempt summary evidence findings)
-        "terminal" -> ~w(transition_id from_role outcome to_role round planning_attempt summary evidence findings)
-        "escalation" -> ~w(transition_id from_role outcome to_role round planning_attempt summary evidence findings)
+        kind when kind in ["transition", "terminal", "escalation"] ->
+          ~w(transition_id role role_result_schema from_role outcome to_role round planning_attempt summary evidence findings human_question terminal_reason)
         "blocked" -> ~w(summary evidence findings)
       end
 

@@ -66,8 +66,12 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
              LifecycleCoordinator.commit_role_result(issue, :pm, result)
 
     assert event["kind"] == "transition"
+    assert event["role"] == "PM"
+    assert event["role_result_schema"] == "symphony.role-result/v1"
     assert event["to_role"] == "PLANNER"
     assert event["lifecycle_id"] == lifecycle_id
+    assert event["human_question"] == nil
+    assert event["terminal_reason"] == nil
     assert projected.labels == ["symphony:auto", "human-label", "symphony:role:planner"]
 
     assert {:ok, %{idempotent?: true}} =
@@ -75,10 +79,11 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
 
     state = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
     assert Enum.count(state.comments, &String.contains?(&1["body"], "symphony.lifecycle/v1")) == 2
+    assert Enum.all?(state.comments, &(not String.contains?(&1["body"], "<!--")))
 
     transition_append_index =
       Enum.find_index(state.trace, fn
-        {:append, body} -> String.contains?(body, "\"kind\":\"transition\"")
+        {:append, body} -> String.contains?(body, "\"kind\": \"transition\"")
         _ -> false
       end)
 
@@ -107,7 +112,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
         state
         | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:planner"]},
           comments: [
-            %{"body" => LifecycleHistory.render(LifecycleHistory.start_event("life-1"), "started")}
+            %{"body" => LifecycleHistory.render(LifecycleHistory.start_event("life-1"))}
           ]
       }
     end)
@@ -236,7 +241,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       terminal_event(lifecycle_id, "ARCHIVIST", "archive_complete", "LIFECYCLE_COMPLETE", 1, 1)
     ]
 
-    Enum.map(events, &%{"body" => LifecycleHistory.render(&1, "lifecycle test")})
+    Enum.map(events, &%{"body" => LifecycleHistory.render(&1)})
   end
 
   defp transition_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt) do
@@ -244,6 +249,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       "schema" => LifecycleHistory.schema(),
       "kind" => "transition",
       "lifecycle_id" => lifecycle_id,
+      "role_result_schema" => "symphony.role-result/v1",
       "transition_id" =>
         LifecycleHistory.transition_id(
           lifecycle_id,
@@ -252,6 +258,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
           String.downcase(from_role) |> String.to_atom(),
           outcome
         ),
+      "role" => from_role,
       "from_role" => from_role,
       "outcome" => outcome,
       "to_role" => to_role,
@@ -259,7 +266,9 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       "planning_attempt" => planning_attempt,
       "summary" => "bounded result",
       "evidence" => ["evidence"],
-      "findings" => []
+      "findings" => [],
+      "human_question" => nil,
+      "terminal_reason" => nil
     }
   end
 

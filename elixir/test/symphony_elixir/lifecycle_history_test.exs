@@ -11,8 +11,8 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
 
     comments = [
       %{"body" => "A human comment with no machine marker."},
-      %{"body" => LifecycleHistory.render(Enum.at(events, 0), "started")},
-      %{"body" => LifecycleHistory.render(Enum.at(events, 1), "planned")}
+      %{"body" => LifecycleHistory.render(Enum.at(events, 0))},
+      %{"body" => LifecycleHistory.render(Enum.at(events, 1))}
     ]
 
     assert {:ok, history} = LifecycleHistory.from_comments(comments)
@@ -23,7 +23,28 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     assert length(history.events) == 2
   end
 
-  test "malformed marked comments fail instead of becoming inferred history" do
+  test "the visible JSON ledger is the exact parser input and preserves the full result" do
+    finding = %{"severity" => "blocking", "summary" => "needs a human decision", "evidence" => ["review note"]}
+
+    event =
+      transition_event("life-visible", "PM", "await_human", "AWAITING_HUMAN", 0, 0)
+      |> Map.merge(%{
+        "kind" => "escalation",
+        "transition_id" => LifecycleHistory.transition_id("life-visible", 0, 0, :pm, "await_human"),
+        "human_question" => "Which direction should the implementation take?",
+        "findings" => [finding]
+      })
+
+    body = LifecycleHistory.render(event)
+
+    refute body =~ "<!--"
+    assert body =~ "```json"
+    assert body =~ "\"human_question\": \"Which direction should the implementation take?\""
+    assert body =~ "\"review note\""
+    assert {:ok, ^event} = LifecycleHistory.parse_comment(body)
+  end
+
+  test "old hidden lifecycle comments fail instead of becoming inferred history" do
     assert {:error, :malformed_lifecycle_comment} =
              LifecycleHistory.parse_comments([
                %{"body" => "<!-- symphony.lifecycle/v1\nnot-json\n-->"}
@@ -37,15 +58,18 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     assert :ignore = LifecycleHistory.parse_comment(:not_a_comment)
 
     start = LifecycleHistory.start_event("life-parser")
-    comment = "<!-- symphony.lifecycle/v1\n#{Jason.encode!(start)}\n-->"
+    comment = LifecycleHistory.render(start)
 
-    assert {:ok, %{"_human_summary" => ""}} = LifecycleHistory.parse_comment(comment)
-    assert {:ok, %{"_human_summary" => ""}} = LifecycleHistory.parse_comment(%{body: comment})
-    assert {:ok, %{"_human_summary" => ""}} = LifecycleHistory.parse_comment(%{body: comment})
+    assert {:ok, ^start} = LifecycleHistory.parse_comment(comment)
+    assert {:ok, ^start} = LifecycleHistory.parse_comment(%{body: comment})
+    assert {:ok, ^start} = LifecycleHistory.parse_comment(%{body: comment})
     assert {:error, :malformed_lifecycle_comment} = LifecycleHistory.parse_comment(%{body: comment <> " trailing"})
 
+    hidden_comment = "<!-- symphony.lifecycle/v1\n#{Jason.encode!(start)}\n-->"
+    assert {:error, :malformed_lifecycle_comment} = LifecycleHistory.parse_comment(hidden_comment)
+
     assert {:error, {:lifecycle_event_json_error, _}} =
-             LifecycleHistory.parse_comment("<!-- symphony.lifecycle/v1\n{bad}\n-->")
+             LifecycleHistory.parse_comment("```json\n{bad}\n```")
 
     assert {:error, :lifecycle_event_without_start} =
              LifecycleHistory.project([transition_event("life-parser", "PM", "plan", "PLANNER", 1, 1)])
@@ -227,6 +251,7 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
       "schema" => LifecycleHistory.schema(),
       "kind" => "transition",
       "lifecycle_id" => lifecycle_id,
+      "role_result_schema" => "symphony.role-result/v1",
       "transition_id" =>
         LifecycleHistory.transition_id(
           lifecycle_id,
@@ -235,6 +260,7 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
           String.downcase(from_role) |> String.to_atom(),
           outcome
         ),
+      "role" => from_role,
       "from_role" => from_role,
       "outcome" => outcome,
       "to_role" => to_role,
@@ -242,7 +268,9 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
       "planning_attempt" => planning_attempt,
       "summary" => "bounded result",
       "evidence" => ["evidence"],
-      "findings" => []
+      "findings" => [],
+      "human_question" => nil,
+      "terminal_reason" => nil
     }
   end
 
@@ -252,6 +280,6 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
   end
 
   defp parse_event(event) do
-    LifecycleHistory.parse_comment(LifecycleHistory.render(event, "validation"))
+    LifecycleHistory.parse_comment(LifecycleHistory.render(event))
   end
 end

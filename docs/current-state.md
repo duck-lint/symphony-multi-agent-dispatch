@@ -26,7 +26,9 @@ GitHub labels are the current lifecycle projection. Append-only host-written com
 lifecycle history and handoff log, with deterministic transition IDs for idempotent retries. Host-local
 PM metadata stores only the task/lifecycle binding, thread ID, and optional Codex rollout/thread path
 needed for reconnect. It is not lifecycle authority; lifecycle recovery comes from GitHub labels and
-comments.
+comments. Each lifecycle comment is one fully visible, pretty-printed JSON event. The exact JSON object
+is parsed for reconstruction, idempotence, and restart recovery and is the complete human-readable issue
+ledger; no lifecycle information is carried only in hidden HTML or a lossy summary.
 
 Terminal projection is idempotent: a correct terminal label set causes no GitHub mutation on later polls.
 Terminal issues are non-dispatchable. If the projection drifts, the host may repair it through the normal

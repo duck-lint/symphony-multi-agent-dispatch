@@ -81,15 +81,17 @@ Workspace artifacts are not lifecycle authority. A mutable "mega-comment" is not
 
 When an opted-in issue begins a lifecycle and has no active lifecycle record, the host creates a `lifecycle_started` comment with a new `lifecycle_id`. A later deliberate rerun after a terminal lifecycle creates a new `lifecycle_id` on the same issue.
 
-Every accepted role transition is persisted as exactly one append-only lifecycle comment before the role label changes. Each lifecycle comment contains a machine-readable `symphony.lifecycle/v1` payload plus a concise human-readable rendering.
+Every accepted role transition is persisted as exactly one append-only lifecycle comment before the role label changes. Each lifecycle comment contains one fully visible, pretty-printed JSON object conforming to `symphony.lifecycle/v1`. That exact object is both the parser input for reconstruction/idempotence/recovery and the complete human-readable issue ledger; there is no hidden HTML payload or lossy prose summary.
 
-The machine-readable transition record must include at least:
+The lifecycle event record must include at least:
 
 ```text
 schema
 kind
 lifecycle_id
 transition_id
+role_result_schema
+role
 from_role
 outcome
 to_role
@@ -98,6 +100,8 @@ planning_attempt
 summary
 evidence
 findings
+human_question
+terminal_reason
 ```
 
 For MVP, transition identity is deterministic from lifecycle position:
