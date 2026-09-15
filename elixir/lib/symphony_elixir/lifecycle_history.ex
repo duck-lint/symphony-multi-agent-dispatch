@@ -259,7 +259,9 @@ defmodule SymphonyElixir.LifecycleHistory do
       case event["kind"] do
         kind when kind in ["transition", "terminal", "escalation"] ->
           ~w(transition_id role role_result_schema from_role outcome to_role round planning_attempt summary evidence findings human_question terminal_reason)
-        "blocked" -> ~w(summary evidence findings)
+
+        "blocked" ->
+          ~w(summary evidence findings)
       end
 
     Enum.reduce_while(required, :ok, fn key, :ok ->
