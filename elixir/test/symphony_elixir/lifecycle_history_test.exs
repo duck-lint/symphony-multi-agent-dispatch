@@ -105,7 +105,7 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     assert {:error, :invalid_lifecycle_event_position} = parse_event(Map.put(base, "round", -1))
 
     terminal = Map.merge(base, %{"kind" => "terminal", "to_role" => "NON_CONVERGED"})
-    escalation = Map.merge(base, %{"kind" => "escalation", "to_role" => "AWAITING_HUMAN", "outcome" => "await_human"})
+    escalation = Map.merge(base, %{"kind" => "escalation", "to_role" => "AWAITING_HUMAN", "outcome" => "await_human", "human_question" => "What operator input is required?"})
 
     blocked =
       Map.take(base, ["schema", "kind", "lifecycle_id", "summary", "evidence", "findings"])
