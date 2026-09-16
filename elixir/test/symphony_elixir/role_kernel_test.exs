@@ -79,7 +79,7 @@ defmodule SymphonyElixir.RoleKernelTest do
     distinctive_behavior = %{
       pm: "project-manager companion for the coding harness",
       planner: "convert intent into an executable plan",
-      reviewer: "judge whether an implementation satisfies the plan",
+      reviewer: "judge whether a proposed plan satisfies the verification contract",
       implementer: "execute one clear seam at a time",
       adversary: "find the cheapest way the current plan",
       archivist: "keep repo-local memory accurate"
@@ -102,6 +102,12 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert prompt =~ "Include \"human_question\" only when outcome is \"await_human\""
       assert prompt =~ "omit \"human_question\" or set it to JSON null"
       assert prompt =~ distinctive_behavior[role]
+      refute prompt =~ "nickname_candidates"
+      refute prompt =~ "already an actual subagent"
+      refute prompt =~ "recursively launch"
+      refute prompt =~ "harness/README.md"
+      refute prompt =~ "recommended next agent"
+      refute prompt =~ "admissibility-blocked"
       refute prompt =~ "Pilot"
     end
 
@@ -119,6 +125,11 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert RoleProfiles.profile!(role).freshness == :fresh
       assert RoleProfiles.profile!(role).thread_policy == :fresh
     end
+
+    refute RoleProfiles.profile!(:planner).instructions =~ "You may edit project-local harness"
+    refute RoleProfiles.profile!(:archivist).instructions =~ "You may edit"
+    refute RoleProfiles.profile!(:implementer).instructions =~ "tracker or verification status"
+    refute RoleProfiles.profile!(:reviewer).instructions =~ "implementation satisfies the plan"
   end
 
   test "legal lifecycle transitions are host-owned" do
