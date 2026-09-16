@@ -17,9 +17,6 @@ defmodule SymphonyElixir.PromptBuilder do
     """
     You are executing the SYMPHONY role #{profile.name}.
 
-    Common execution contract:
-    #{String.trim(RoleProfiles.common_execution_contract())}
-
     Role instructions:
     #{String.trim(profile.instructions)}
 

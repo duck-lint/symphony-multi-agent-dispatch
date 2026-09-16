@@ -1288,7 +1288,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert prompt =~ "You are executing the SYMPHONY role REVIEWER."
     assert prompt =~ "Review the accepted plan."
-    assert prompt =~ "Produce an evidence-backed verdict"
+    assert prompt =~ "judge whether an implementation satisfies the plan"
     assert prompt =~ "symphony.role-result/v1"
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Keep prompt ownership separate"
