@@ -34,6 +34,12 @@ Terminal projection is idempotent: a correct terminal label set causes no GitHub
 Terminal issues are non-dispatchable. If the projection drifts, the host may repair it through the normal
 bounded lifecycle-label path and verifies the result.
 
+Prompt inputs keep four concerns separate: `RoleProfiles` supplies behavioral methodology,
+`RoleRuntimePolicy` supplies enforced mechanical authority, lifecycle context supplies the host-derived
+temporal/structural position, and handoff supplies task-specific prior evidence. Lifecycle context is
+derived from the reconstructed visible ledger for prompt orientation; it is not a second durable record
+or a routing authority.
+
 ## Authority and result contract
 
 Role authority is structural:

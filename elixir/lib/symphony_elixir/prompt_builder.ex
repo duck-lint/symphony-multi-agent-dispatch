@@ -14,11 +14,18 @@ defmodule SymphonyElixir.PromptBuilder do
     profile = profile_for(role, Map.get(context, :role_profile) || RoleProfiles.profile!(role))
     handoff = Map.get(context, :handoff)
     runtime_authority = Map.get(context, :runtime_authority)
+    lifecycle_context = Map.get(context, :lifecycle_context)
 
     runtime_authority_section =
       case runtime_authority do
         nil -> ""
         authority -> "\nHost-enforced runtime authority:\n#{format_context(authority)}\n"
+      end
+
+    lifecycle_context_section =
+      case lifecycle_context do
+        nil -> ""
+        context -> "\nHost-derived lifecycle context:\n#{format_context(context)}\n"
       end
 
     """
@@ -28,6 +35,7 @@ defmodule SymphonyElixir.PromptBuilder do
     #{String.trim(profile.instructions)}
 
     #{runtime_authority_section}
+    #{lifecycle_context_section}
     #{RoleProfiles.result_contract_instructions(profile.role)}
 
     Host-supplied handoff/context:

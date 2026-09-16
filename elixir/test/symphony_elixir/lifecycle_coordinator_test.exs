@@ -58,7 +58,12 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
 
   test "initializes, commits, and idempotently replays a PM transition" do
     issue = github_issue()
-    assert {:ok, %{history: %{lifecycle_id: lifecycle_id}}} = LifecycleCoordinator.prepare_dispatch(issue)
+
+    assert {:ok, %{history: %{lifecycle_id: lifecycle_id}, lifecycle_context: initial_context}} =
+             LifecycleCoordinator.prepare_dispatch(issue)
+
+    assert initial_context.current_role == "PM"
+    assert initial_context.lifecycle_position == "initial_pm"
 
     result = role_result("PM", "plan", "Plan accepted intent")
 
@@ -96,6 +101,18 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       end)
 
     assert transition_append_index < first_projection_mutation_index
+
+    assert {:ok, %{history: planner_history, lifecycle_context: first_planner_context}} =
+             LifecycleCoordinator.prepare_dispatch(projected)
+
+    assert planner_history.current_role == :planner
+    assert first_planner_context.current_role == "PLANNER"
+    assert first_planner_context.predecessor == "PM"
+
+    assert {:ok, %{lifecycle_context: second_planner_context}} =
+             LifecycleCoordinator.prepare_dispatch(projected)
+
+    assert first_planner_context == second_planner_context
   end
 
   test "does not dispatch an opted-out issue" do

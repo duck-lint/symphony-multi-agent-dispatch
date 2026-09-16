@@ -1126,12 +1126,26 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.warning("Skipping dispatch for #{issue_context(issue)}; lifecycle preparation failed: #{inspect(reason)}")
         release_issue_claim(state, issue.id)
 
-      {:ok, %{issue: prepared_issue, handoff: handoff}} ->
-        dispatch_prepared_issue(state, prepared_issue, handoff, attempt, preferred_worker_host)
+      {:ok, %{issue: prepared_issue, handoff: handoff, lifecycle_context: lifecycle_context}} ->
+        dispatch_prepared_issue(
+          state,
+          prepared_issue,
+          handoff,
+          lifecycle_context,
+          attempt,
+          preferred_worker_host
+        )
     end
   end
 
-  defp dispatch_prepared_issue(%State{} = state, issue, handoff, attempt, preferred_worker_host) do
+  defp dispatch_prepared_issue(
+         %State{} = state,
+         issue,
+         handoff,
+         lifecycle_context,
+         attempt,
+         preferred_worker_host
+       ) do
     case role_profile_for_dispatch(issue) do
       {:error, reason} ->
         Logger.warning("Skipping dispatch for #{issue_context(issue)}; invalid lifecycle role state: #{inspect(reason)}")
@@ -1159,13 +1173,24 @@ defmodule SymphonyElixir.Orchestrator do
               worker_host,
               role_profile.role,
               role_profile,
-              handoff
+              handoff,
+              lifecycle_context
             )
         end
     end
   end
 
-  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, role, role_profile, handoff) do
+  defp spawn_issue_on_worker_host(
+         %State{} = state,
+         issue,
+         attempt,
+         recipient,
+         worker_host,
+         role,
+         role_profile,
+         handoff,
+         lifecycle_context
+       ) do
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
            AgentRunner.run(
              issue,
@@ -1175,6 +1200,7 @@ defmodule SymphonyElixir.Orchestrator do
              role: role,
              role_profile: role_profile,
              handoff: handoff,
+             lifecycle_context: lifecycle_context,
              lifecycle_id: Map.get(handoff, :lifecycle_id),
              pm_phase: Map.get(handoff, :pm_phase)
            )

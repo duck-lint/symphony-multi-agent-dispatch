@@ -28,14 +28,14 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   @roles [:pm, :planner, :reviewer, :implementer, :adversary, :archivist]
 
   @spec prepare_dispatch(Issue.t(), keyword()) ::
-          {:ok, %{issue: Issue.t(), history: map() | nil, handoff: map()}}
+          {:ok, %{issue: Issue.t(), history: map() | nil, handoff: map(), lifecycle_context: map()}}
           | {:skip, term()}
           | {:error, term()}
   def prepare_dispatch(%Issue{id: issue_id} = issue, _opts \\ []) when is_binary(issue_id) do
     if github_tracker?() do
       prepare_github_dispatch_for_issue(issue_id)
     else
-      {:ok, %{issue: issue, history: nil, handoff: %{}}}
+      {:ok, %{issue: issue, history: nil, handoff: %{}, lifecycle_context: %{}}}
     end
   end
 
@@ -247,7 +247,13 @@ defmodule SymphonyElixir.LifecycleCoordinator do
              {:ok, role} <- RoleRouter.role_for_issue(issue),
              :ok <- reconcile_active_projection(issue, history, role),
              {:ok, projected_issue} <- github_client().fetch_issue(issue.id) do
-          {:ok, %{issue: projected_issue, history: history, handoff: dispatch_handoff(history)}}
+          {:ok,
+           %{
+             issue: projected_issue,
+             history: history,
+             handoff: dispatch_handoff(history),
+             lifecycle_context: Lifecycle.lifecycle_context(history)
+           }}
         else
           {:error, :symphony_auto_required} = error -> error
           {:error, reason} -> handle_invalid_state(issue, history, reason)
@@ -351,7 +357,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
          %{
            issue: projected_issue,
            history: started_history,
-           handoff: dispatch_handoff(started_history)
+           handoff: dispatch_handoff(started_history),
+           lifecycle_context: Lifecycle.lifecycle_context(started_history)
          }}
       else
         {:ok, role} -> {:error, {:lifecycle_started_with_unexpected_role, role}}

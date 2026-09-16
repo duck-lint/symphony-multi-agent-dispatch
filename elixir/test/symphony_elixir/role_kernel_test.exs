@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RoleKernelTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.RoleRuntimePolicy
+  alias SymphonyElixir.{LifecycleHistory, RoleRuntimePolicy}
 
   @roles [
     {:pm, "PM", "symphony:role:pm"},
@@ -96,8 +96,10 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert prompt =~ "Do not invent synonyms such as \"handoff\" or \"done\"."
       assert prompt =~ "required top-level keys and no other keys"
       assert prompt =~ "role\" must be exactly \"#{RoleProfiles.role_name(role)}\""
+
       assert prompt =~
                "summary\" must be a non-empty JSON string of at most #{RoleProfiles.role_result_summary_max_length()} characters"
+
       assert prompt =~ "evidence\" must be a JSON array"
       assert prompt =~ "findings\" must be a JSON array"
       assert prompt =~ "exactly these keys:"
@@ -147,6 +149,97 @@ defmodule SymphonyElixir.RoleKernelTest do
     refute RoleProfiles.profile!(:archivist).instructions =~ "You may edit"
     refute RoleProfiles.profile!(:implementer).instructions =~ "tracker or verification status"
     refute RoleProfiles.profile!(:reviewer).instructions =~ "implementation satisfies the plan"
+  end
+
+  test "reviewer lifecycle context describes pre-implementation plan review" do
+    context =
+      Lifecycle.lifecycle_context(
+        lifecycle_state(:reviewer, :planner,
+          round: 2,
+          planning_attempt: 1,
+          pm_phase: :returning,
+          completed_working_round?: true
+        )
+      )
+
+    assert context.current_role == "REVIEWER"
+    assert context.lifecycle_position == "pre_implementation_plan_review"
+    assert context.predecessor == "PLANNER"
+    assert context.object_received == "Planner's proposed implementation plan"
+    assert context.object_produced == "plan acceptance or revision result"
+    assert context.implementation_status == "not_started"
+    assert "Implementer has not executed the proposed plan." in context.not_yet_happened
+    assert context.temporal_interpretation =~ "absence of planned mutations is expected"
+
+    assert %{destination: "IMPLEMENTER", available_now?: true} =
+             Enum.find(context.outcome_routes, &(&1.outcome == "accept"))
+
+    assert %{destination: "PLANNER", available_now?: true} =
+             Enum.find(context.outcome_routes, &(&1.outcome == "revise"))
+
+    issue = %Issue{identifier: "T-REVIEW", title: "Plan review"}
+    prompt = PromptBuilder.build_prompt(issue, :reviewer, %{lifecycle_context: context})
+
+    assert prompt =~ "Host-derived lifecycle context:"
+    assert prompt =~ "current_role: \"REVIEWER\""
+    assert prompt =~ "object_received: \"Planner's proposed implementation plan\""
+    assert prompt =~ "implementation_status: \"not_started\""
+    assert prompt =~ "absence of planned mutations is expected"
+  end
+
+  test "lifecycle context describes the generic role metamap without changing routing" do
+    assertions = [
+      {:planner, :pm, "proposed implementation plan", "not_started", "REVIEWER"},
+      {:implementer, :reviewer, "implemented project seam", "in_progress", "ADVERSARY"},
+      {:adversary, :implementer, "adversarial review result", "completed", "PM"},
+      {:archivist, :pm, "archival and continuity result", "completed", "LIFECYCLE_COMPLETE"}
+    ]
+
+    for {role, predecessor, object_produced, implementation_status, destination} <- assertions do
+      context = Lifecycle.lifecycle_context(lifecycle_state(role, predecessor))
+
+      assert context.current_role == RoleProfiles.role_name(role)
+      assert context.object_produced == object_produced
+      assert context.implementation_status == implementation_status
+
+      assert Enum.any?(context.outcome_routes, fn route ->
+               route.destination == destination
+             end)
+    end
+
+    planner_context = Lifecycle.lifecycle_context(lifecycle_state(:planner, :pm))
+    assert planner_context.temporal_interpretation =~ "do not treat its proposed mutations as already applied"
+
+    returning_pm =
+      Lifecycle.lifecycle_context(
+        lifecycle_state(:pm, :adversary,
+          round: 2,
+          planning_attempt: 1,
+          pm_phase: :returning,
+          completed_working_round?: true
+        )
+      )
+
+    assert returning_pm.lifecycle_position == "returning_pm"
+    assert returning_pm.object_received == "completed working-round evidence, especially the Adversary result"
+    assert Enum.any?(returning_pm.outcome_routes, &(&1.destination == "PLANNER"))
+    assert Enum.any?(returning_pm.outcome_routes, &(&1.destination == "ARCHIVIST"))
+  end
+
+  test "reconstructed lifecycle history produces stable lifecycle context" do
+    lifecycle_id = "lifecycle-context-1"
+
+    comments = [
+      LifecycleHistory.render(LifecycleHistory.start_event(lifecycle_id)),
+      LifecycleHistory.render(reconstructed_transition(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)),
+      LifecycleHistory.render(reconstructed_transition(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1))
+    ]
+
+    assert {:ok, history_after_restart} = LifecycleHistory.from_comments(comments)
+    assert {:ok, history_after_second_restart} = LifecycleHistory.from_comments(comments)
+
+    assert Lifecycle.lifecycle_context(history_after_restart) ==
+             Lifecycle.lifecycle_context(history_after_second_restart)
   end
 
   test "legal lifecycle transitions are host-owned" do
@@ -407,6 +500,48 @@ defmodule SymphonyElixir.RoleKernelTest do
       "summary" => "bounded result",
       "evidence" => ["observed evidence"],
       "findings" => []
+    }
+  end
+
+  defp lifecycle_state(role, predecessor, overrides \\ []) do
+    %{
+      current_role: role,
+      round: Keyword.get(overrides, :round, 1),
+      planning_attempt: Keyword.get(overrides, :planning_attempt, 1),
+      pm_phase: Keyword.get(overrides, :pm_phase, :returning),
+      completed_working_round?: Keyword.get(overrides, :completed_working_round?, false),
+      preceding_adversary_findings: [],
+      events: [%{"from_role" => RoleProfiles.role_name(predecessor)}]
+    }
+  end
+
+  defp reconstructed_transition(lifecycle_id, role, outcome, to_role, round, planning_attempt) do
+    result = valid_result(role, outcome)
+
+    %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "transition",
+      "lifecycle_id" => lifecycle_id,
+      "role_result_schema" => result["schema"],
+      "transition_id" =>
+        LifecycleHistory.transition_id(
+          lifecycle_id,
+          round,
+          planning_attempt,
+          String.downcase(role) |> String.to_atom(),
+          outcome
+        ),
+      "role" => role,
+      "from_role" => role,
+      "outcome" => outcome,
+      "to_role" => to_role,
+      "round" => round,
+      "planning_attempt" => planning_attempt,
+      "summary" => result["summary"],
+      "evidence" => result["evidence"],
+      "findings" => result["findings"],
+      "human_question" => nil,
+      "terminal_reason" => nil
     }
   end
 end
