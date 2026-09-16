@@ -13,6 +13,13 @@ defmodule SymphonyElixir.PromptBuilder do
   def build_prompt(%Issue{} = issue, role, context \\ %{}) when is_map(context) do
     profile = profile_for(role, Map.get(context, :role_profile) || RoleProfiles.profile!(role))
     handoff = Map.get(context, :handoff)
+    runtime_authority = Map.get(context, :runtime_authority)
+
+    runtime_authority_section =
+      case runtime_authority do
+        nil -> ""
+        authority -> "\nHost-enforced runtime authority:\n#{format_context(authority)}\n"
+      end
 
     """
     You are executing the SYMPHONY role #{profile.name}.
@@ -20,6 +27,7 @@ defmodule SymphonyElixir.PromptBuilder do
     Role instructions:
     #{String.trim(profile.instructions)}
 
+    #{runtime_authority_section}
     #{RoleProfiles.result_contract_instructions(profile.role)}
 
     Host-supplied handoff/context:

@@ -192,11 +192,12 @@ defmodule SymphonyElixir.AgentRunner do
          opts,
          role,
          role_profile,
-         _role_policy
+         role_policy
        ) do
     prompt_context = %{
       role_profile: role_profile,
-      handoff: Keyword.get(opts, :handoff)
+      handoff: Keyword.get(opts, :handoff),
+      runtime_authority: RoleRuntimePolicy.snapshot(role_policy)
     }
 
     prompt = PromptBuilder.build_prompt(issue, role, prompt_context)

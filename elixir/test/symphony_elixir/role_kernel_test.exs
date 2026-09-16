@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.RoleKernelTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.RoleRuntimePolicy
+
   @roles [
     {:pm, "PM", "symphony:role:pm"},
     {:planner, "PLANNER", "symphony:role:planner"},
@@ -116,6 +118,20 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert prompt =~ "round: 2"
     assert prompt =~ "findings: [:advisory]"
+
+    {:ok, reviewer_policy} = RoleRuntimePolicy.for_role(:reviewer, "/tmp/issue-workspace")
+
+    prompt_with_authority =
+      PromptBuilder.build_prompt(issue, :reviewer, %{
+        role_profile: RoleProfiles.profile!(:reviewer),
+        runtime_authority: RoleRuntimePolicy.snapshot(reviewer_policy)
+      })
+
+    assert prompt_with_authority =~ "Host-enforced runtime authority:"
+    assert prompt_with_authority =~ "write_authority: :read_only"
+    assert prompt_with_authority =~ "sandbox_mode: \"readOnly\""
+    assert prompt_with_authority =~ "network_enabled: false"
+    assert prompt_with_authority =~ "model_tracker_tools: :disabled"
 
     implementer_prompt = PromptBuilder.build_prompt(issue, :implementer)
     assert implementer_prompt =~ "validate the result against live runtime"
