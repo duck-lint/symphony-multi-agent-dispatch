@@ -13,7 +13,6 @@ defmodule SymphonyElixir.Lifecycle do
   @required_result_keys ~w(schema role outcome summary evidence findings)
   @allowed_result_keys ~w(schema role outcome summary evidence findings human_question)
   @finding_keys ~w(severity summary evidence)
-  @max_summary_length 4_000
 
   @type destination :: RoleProfiles.role() | :await_human | :lifecycle_complete
   @type pm_phase :: :initial | :returning
@@ -179,7 +178,8 @@ defmodule SymphonyElixir.Lifecycle do
   defp validate_summary(summary) when is_binary(summary) do
     cond do
       String.trim(summary) == "" -> {:error, :empty_role_result_summary}
-      String.length(summary) > @max_summary_length -> {:error, :role_result_summary_too_long}
+      String.length(summary) > RoleProfiles.role_result_summary_max_length() ->
+        {:error, :role_result_summary_too_long}
       true -> :ok
     end
   end

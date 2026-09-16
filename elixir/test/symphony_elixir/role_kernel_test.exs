@@ -96,7 +96,8 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert prompt =~ "Do not invent synonyms such as \"handoff\" or \"done\"."
       assert prompt =~ "required top-level keys and no other keys"
       assert prompt =~ "role\" must be exactly \"#{RoleProfiles.role_name(role)}\""
-      assert prompt =~ "summary\" must be a non-empty JSON string of at most 4,000 characters"
+      assert prompt =~
+               "summary\" must be a non-empty JSON string of at most #{RoleProfiles.role_result_summary_max_length()} characters"
       assert prompt =~ "evidence\" must be a JSON array"
       assert prompt =~ "findings\" must be a JSON array"
       assert prompt =~ "exactly these keys:"
@@ -247,8 +248,19 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert {:error, :invalid_role_result_summary} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "summary", 12))
 
+    max_summary = String.duplicate("x", RoleProfiles.role_result_summary_max_length())
+
+    assert {:ok, _} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "summary", max_summary))
+
     assert {:error, :role_result_summary_too_long} =
-             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "summary", String.duplicate("x", 4_001)))
+             Lifecycle.validate_result(
+               Map.put(
+                 valid_result("REVIEWER", "accept"),
+                 "summary",
+                 max_summary <> "x"
+               )
+             )
 
     assert {:error, :invalid_role_result_evidence} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "evidence", ["", 12]))

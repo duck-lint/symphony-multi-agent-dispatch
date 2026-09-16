@@ -62,7 +62,7 @@ Adversary    review_complete | await_human
 Archivist    archive_complete | await_human
 ```
 
-`summary` is a non-empty string of at most 4,000 characters. `evidence` is an array of non-empty strings.
+`summary` is a non-empty string of at most 16,000 characters. `evidence` is an array of non-empty strings.
 Each finding has exactly `severity`, `summary`, and `evidence`; severity is `blocking` or `advisory`, the
 summary is non-empty, and evidence is an array of non-empty strings. `human_question` is required and
 non-empty only for `await_human`; otherwise it is omitted or null. Unknown fields, including `next_role`,
