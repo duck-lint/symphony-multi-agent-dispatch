@@ -159,10 +159,8 @@ defmodule SymphonyElixir.Lifecycle do
       required?: current_role == :planner and is_map(correction_report),
       preceding_correction: prerequisite_event_snapshot(correction),
       attempted_resolution: prerequisite_event_snapshot(attempted_resolution),
-      outstanding_evidence_frontier:
-        (correction_report || attempted_report || %{})["authoritative_requirement"] || [],
-      resolution_for_current_role:
-        if current_role == :planner, do: correction_report, else: attempted_report
+      outstanding_evidence_frontier: (correction_report || attempted_report || %{})["authoritative_requirement"] || [],
+      resolution_for_current_role: if(current_role == :planner, do: correction_report, else: attempted_report)
     }
   end
 
@@ -619,8 +617,12 @@ defmodule SymphonyElixir.Lifecycle do
     missing = @prerequisite_resolution_keys -- Map.keys(report)
 
     cond do
-      unknown != [] -> {:error, {:unknown_prerequisite_resolution_fields, unknown}}
-      missing != [] -> {:error, {:missing_prerequisite_resolution_fields, missing}}
+      unknown != [] ->
+        {:error, {:unknown_prerequisite_resolution_fields, unknown}}
+
+      missing != [] ->
+        {:error, {:missing_prerequisite_resolution_fields, missing}}
+
       true ->
         with :ok <- validate_non_empty_string(report["blocked_objective"], :blocked_objective),
              :ok <- validate_non_empty_string(report["missing_prerequisite"], :missing_prerequisite),
@@ -646,8 +648,12 @@ defmodule SymphonyElixir.Lifecycle do
         missing = @alternative_keys -- Map.keys(alternative)
 
         cond do
-          unknown != [] -> {:halt, {:error, {:unknown_prerequisite_alternative_fields, unknown}}}
-          missing != [] -> {:halt, {:error, {:missing_prerequisite_alternative_fields, missing}}}
+          unknown != [] ->
+            {:halt, {:error, {:unknown_prerequisite_alternative_fields, unknown}}}
+
+          missing != [] ->
+            {:halt, {:error, {:missing_prerequisite_alternative_fields, missing}}}
+
           true ->
             case validate_alternative(alternative) do
               :ok -> {:cont, :ok}
@@ -701,7 +707,8 @@ defmodule SymphonyElixir.Lifecycle do
   defp validate_resolution_consistency(%{
          "resolution_status" => "external_prerequisite",
          "authority_status" => "requires_external_action"
-       }), do: :ok
+       }),
+       do: :ok
 
   defp validate_resolution_consistency(%{"resolution_status" => "no_feasible_authorized_path_established"} = report) do
     if prerequisite_resolution_complete?(report), do: :ok, else: {:error, :incomplete_prerequisite_non_convergence}

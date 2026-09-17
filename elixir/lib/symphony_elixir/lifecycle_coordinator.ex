@@ -169,7 +169,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
   defp expected_terminal_reasons(%{"role" => role, "outcome" => "non_converged"})
        when role in ["PLANNER", "REVIEWER"],
-    do: ["prerequisite_no_feasible_authorized_path"]
+       do: ["prerequisite_no_feasible_authorized_path"]
 
   defp expected_terminal_reasons(%{"role" => "REVIEWER", "outcome" => "revise"}),
     do: ["planning_attempt_exhausted", "prerequisite_non_progress"]
@@ -418,7 +418,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
       outcome == "await_human" and is_map(report) and
           not (report["resolution_status"] == "external_prerequisite" and
-                 report["authority_status"] == "requires_external_action") ->
+                   report["authority_status"] == "requires_external_action") ->
         {:error, :await_human_requires_specific_external_prerequisite}
 
       outcome == "non_converged" and not Lifecycle.prerequisite_resolution_complete?(report) ->

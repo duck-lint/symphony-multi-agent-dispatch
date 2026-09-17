@@ -496,24 +496,19 @@ defmodule SymphonyElixir.RoleKernelTest do
     resolved = prerequisite_report("resolved")
     unresolved = prerequisite_report("unresolved")
     exhausted = prerequisite_report("no_feasible_authorized_path_established")
+
     external =
       prerequisite_report("external_prerequisite")
       |> Map.put("authority_status", "requires_external_action")
 
     assert {:ok, _} =
-             Lifecycle.validate_result(
-               Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", resolved)
-             )
+             Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", resolved))
 
     assert {:error, :plan_ready_has_unresolved_prerequisite} =
-             Lifecycle.transition_for_result(
-               Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", unresolved)
-             )
+             Lifecycle.transition_for_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", unresolved))
 
     assert {:ok, %{to_role: :non_converged}} =
-             Lifecycle.transition_for_result(
-               Map.put(valid_result("PLANNER", "non_converged"), "prerequisite_resolution", exhausted)
-             )
+             Lifecycle.transition_for_result(Map.put(valid_result("PLANNER", "non_converged"), "prerequisite_resolution", exhausted))
 
     assert {:ok, %{to_role: :await_human}} =
              Lifecycle.transition_for_result(
@@ -536,10 +531,8 @@ defmodule SymphonyElixir.RoleKernelTest do
     incomplete_alternative = Map.put(List.first(exhausted["alternatives"]), "disposition", "unexamined")
     incomplete = Map.put(exhausted, "alternatives", [incomplete_alternative])
 
-    assert {:error, :non_converged_requires_complete_prerequisite_resolution} =
-             Lifecycle.transition_for_result(
-               Map.put(valid_result("PLANNER", "non_converged"), "prerequisite_resolution", incomplete)
-             )
+    assert {:error, :incomplete_prerequisite_non_convergence} =
+             Lifecycle.transition_for_result(Map.put(valid_result("PLANNER", "non_converged"), "prerequisite_resolution", incomplete))
   end
 
   test "prerequisite context reconstructs the correction and exact progress frontier" do
@@ -565,7 +558,7 @@ defmodule SymphonyElixir.RoleKernelTest do
     context = Lifecycle.prerequisite_context(state)
     assert context.required?
     assert context.preceding_correction.prerequisite_resolution == report
-    assert context.outstanding_evidence_frontier == ["The governing requirement still needs evidence."]
+    assert context.outstanding_evidence_frontier == ["The governing task contract requires the capability."]
 
     history = %{
       round: 1,
@@ -612,8 +605,7 @@ defmodule SymphonyElixir.RoleKernelTest do
           "disposition" => if(status == "resolved", do: "available", else: "demonstrated_infeasible")
         }
       ],
-      "authority_status" =>
-        if(status == "resolved", do: "within_existing_authority", else: "not_resolvable_with_existing_authority"),
+      "authority_status" => if(status == "resolved", do: "within_existing_authority", else: "not_resolvable_with_existing_authority"),
       "unlock_action" => "Supply evidence or capability for the missing prerequisite.",
       "resolution_status" => status
     }

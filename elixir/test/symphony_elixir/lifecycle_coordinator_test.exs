@@ -124,12 +124,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
         | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:planner", "human-label"]},
           comments: [
             %{"body" => LifecycleHistory.render(LifecycleHistory.start_event(lifecycle_id))},
-            %{
-              "body" =>
-                LifecycleHistory.render(
-                  transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)
-                )
-            }
+            %{"body" => LifecycleHistory.render(transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1))}
           ]
       }
     end)
