@@ -159,19 +159,25 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   defp event_material_matches_result?(event, result) do
     event["role"] == result["role"] and
       event["role_result_schema"] == result["schema"] and
-      Enum.all?(["summary", "evidence", "findings"], fn key -> event[key] == result[key] end) and
+      Enum.all?(["summary", "evidence", "findings", "prerequisite_resolution"], fn key ->
+        Map.get(event, key) == Map.get(result, key)
+      end) and
       Map.get(event, "human_question") == Map.get(result, "human_question") and
       (event["kind"] != "terminal" or
-         event["terminal_reason"] == expected_terminal_reason(result))
+         event["terminal_reason"] in expected_terminal_reasons(result))
   end
 
-  defp expected_terminal_reason(%{"role" => "REVIEWER", "outcome" => "revise"}),
-    do: "planning_attempt_exhausted"
+  defp expected_terminal_reasons(%{"role" => role, "outcome" => "non_converged"})
+       when role in ["PLANNER", "REVIEWER"],
+    do: ["prerequisite_no_feasible_authorized_path"]
 
-  defp expected_terminal_reason(%{"role" => "PM", "outcome" => "plan"}),
-    do: "working_round_exhausted"
+  defp expected_terminal_reasons(%{"role" => "REVIEWER", "outcome" => "revise"}),
+    do: ["planning_attempt_exhausted", "prerequisite_non_progress"]
 
-  defp expected_terminal_reason(_result), do: nil
+  defp expected_terminal_reasons(%{"role" => "PM", "outcome" => "plan"}),
+    do: ["working_round_exhausted"]
+
+  defp expected_terminal_reasons(_result), do: [nil]
 
   defp transition_from_event(%{"kind" => kind, "from_role" => from_role, "outcome" => outcome, "to_role" => to_role} = event) do
     with {:ok, canonical_from_role} <- canonical_role(from_role),
@@ -191,7 +197,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
            "summary" => event["summary"],
            "evidence" => event["evidence"],
            "findings" => event["findings"],
-           "human_question" => event["human_question"]
+           "human_question" => event["human_question"],
+           "prerequisite_resolution" => Map.get(event, "prerequisite_resolution")
          }
        }}
     end
@@ -221,6 +228,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       pm_phase: history.pm_phase,
       completed_working_round?: history.completed_working_round?,
       preceding_adversary_findings: history.preceding_adversary_findings,
+      prerequisite_context: Lifecycle.prerequisite_context(history),
       accepted_events: handoff_events
     }
   end
@@ -397,15 +405,43 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp validate_prerequisite_commit(prerequisite_context, result) do
+    report = Map.get(result, "prerequisite_resolution")
+    outcome = result["outcome"]
+
+    cond do
+      prerequisite_context[:required?] and not is_map(report) ->
+        {:error, :missing_prerequisite_resolution_report}
+
+      outcome == "plan_ready" and is_map(report) and report["resolution_status"] != "resolved" ->
+        {:error, :plan_ready_has_unresolved_prerequisite}
+
+      outcome == "await_human" and is_map(report) and
+          not (report["resolution_status"] == "external_prerequisite" and
+                 report["authority_status"] == "requires_external_action") ->
+        {:error, :await_human_requires_specific_external_prerequisite}
+
+      outcome == "non_converged" and not Lifecycle.prerequisite_resolution_complete?(report) ->
+        {:error, :non_converged_requires_complete_prerequisite_resolution}
+
+      true ->
+        :ok
+    end
+  end
+
   defp transition_for_commit(history, result) do
+    prerequisite_context = Lifecycle.prerequisite_context(history)
+
     context = %{
       pm_phase: history.pm_phase || :initial,
       completed_working_round?: history.completed_working_round?,
       preceding_adversary_findings: history.preceding_adversary_findings,
-      findings: result["findings"]
+      findings: result["findings"],
+      prerequisite_resolution: result["prerequisite_resolution"]
     }
 
-    with {:ok, transition} <- Lifecycle.transition_for_result(result, context),
+    with :ok <- validate_prerequisite_commit(prerequisite_context, result),
+         {:ok, transition} <- Lifecycle.transition_for_result(result, context),
          {:ok, position} <- transition_position(history, result),
          {:ok, budget_transition} <- apply_budget(history, result, transition, position) do
       {:ok,
@@ -430,11 +466,21 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   defp apply_budget(history, %{"role" => role_name, "outcome" => "revise"} = result, transition, position) do
     with {:ok, :reviewer} <- canonical_role(role_name) do
       if history.planning_attempt >= 3 do
-        {:ok, non_converged_transition(history, result, transition, position, "planning_attempt_exhausted")}
+        reason =
+          case Lifecycle.prerequisite_progress(history, result) do
+            :unchanged -> "prerequisite_non_progress"
+            _ -> "planning_attempt_exhausted"
+          end
+
+        {:ok, non_converged_transition(history, result, transition, position, reason)}
       else
         {:ok, Map.put(transition, :kind, "transition")}
       end
     end
+  end
+
+  defp apply_budget(_history, %{"outcome" => "non_converged"} = result, transition, position) do
+    {:ok, non_converged_transition(%{}, result, transition, position, "prerequisite_no_feasible_authorized_path")}
   end
 
   defp apply_budget(history, %{"role" => "PM", "outcome" => "plan"} = result, transition, position) do
@@ -518,6 +564,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
     Map.merge(payload, %{
       "human_question" => Map.get(result, "human_question"),
+      "prerequisite_resolution" => Map.get(result, "prerequisite_resolution"),
       "terminal_reason" => Map.get(transition, :terminal_reason)
     })
   end

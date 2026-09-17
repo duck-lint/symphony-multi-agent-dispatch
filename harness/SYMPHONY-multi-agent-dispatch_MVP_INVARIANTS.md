@@ -177,14 +177,22 @@ MVP finding severity is only `blocking` or `advisory`.
 
 `human_question` must be non-null only when `outcome` is `await_human`; otherwise it must be null.
 
+PLANNER and REVIEWER may include a `prerequisite_resolution` object when a prerequisite blocks feasibility.
+It records the blocked objective, missing prerequisite, absence evidence, authoritative requirement, material
+alternatives with evidence and dispositions (`available`, `observed_unavailable`, `demonstrated_infeasible`,
+`unauthorized`, `unexamined`, or `inaccessible`), authority status, smallest unlock action, and resolution
+status. An unexamined or inaccessible alternative is not demonstrated infeasible. The host validates this
+structure and carries it in the visible event ledger, but does not verify domain facts, semantic equivalence,
+or an agent's claim that its investigation was exhaustive.
+
 The result schema does **not** contain `next_role`. Models report role-specific outcomes; host code maps valid outcomes to legal transitions.
 
 Allowed outcomes are:
 
 ```text
 PM           plan | converge | await_human
-Planner      plan_ready | await_human
-Reviewer     accept | revise | await_human
+Planner      plan_ready | non_converged | await_human
+Reviewer     accept | revise | non_converged | await_human
 Implementer  implementation_complete | await_human
 Adversary    review_complete | await_human
 Archivist    archive_complete | await_human
@@ -197,7 +205,9 @@ initial PM + plan                  → PLANNER
 returning PM + plan                → PLANNER, subject to round budget
 returning PM + converge            → ARCHIVIST, subject to convergence preconditions
 PLANNER + plan_ready               → REVIEWER
+PLANNER + non_converged            → non-converged terminal, subject to complete prerequisite investigation
 REVIEWER + revise                  → PLANNER, subject to planning-attempt budget
+REVIEWER + non_converged            → non-converged terminal, subject to complete prerequisite investigation
 REVIEWER + accept                  → IMPLEMENTER
 IMPLEMENTER + implementation_complete → ADVERSARY
 ADVERSARY + review_complete        → PM
@@ -214,6 +224,14 @@ A Reviewer `accept` result may not contain blocking findings. A returning PM `co
 Blocking findings from the immediately preceding Adversary result structurally forbid `PM → ARCHIVIST`. They can only be cleared for convergence purposes by another complete working round whose Adversary result contains no blocking findings.
 
 The host validates role, schema, outcome, budget, convergence preconditions, and expected current GitHub state before changing lifecycle state.
+
+When a prerequisite correction is active, a fresh Planner must return a structured resolution report. A
+`plan_ready` result with an unresolved report is invalid. A specific external prerequisite may use
+`await_human` with a precise request. A Planner or Reviewer may use `non_converged` only when its report
+establishes that no feasible authorized path has been established after relevant available and authorized
+alternatives were investigated. At the planning-attempt boundary, exact unchanged structured Planner/Reviewer
+reports may be recorded with terminal reason `prerequisite_non_progress`; a changed report remains eligible
+for ordinary review. This is a conservative repetition check, not a semantic proof of infeasibility.
 
 A safe transition order is:
 

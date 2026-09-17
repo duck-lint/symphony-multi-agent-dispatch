@@ -17,6 +17,21 @@ Reviewer revision returns to a fresh Planner. A blocking Adversary finding force
 through the same task-scoped PM. The initial PM cannot converge or skip to Archivist. Planning attempts are
 bounded at 3 per round and working rounds at 8; exhaustion is `symphony:state:non-converged`, not success.
 
+Planner and Reviewer can carry a structured `prerequisite_resolution` report when a prerequisite blocks
+feasibility. The report records the blocked objective, missing prerequisite, evidence of absence, governing
+requirement, material alternatives and their dispositions, authority to resolve the prerequisite, the smallest
+unlocking action, and resolution status. The host validates its shape and legal disposition, then carries the
+accepted report in the visible lifecycle event and in the next handoff/context snapshot. It does not infer
+semantic equivalence, verify domain facts, or treat a model assertion of exhaustive investigation as host proof.
+
+`plan_ready` and `accept` require a reported prerequisite to be resolved. A specific external prerequisite may
+produce `await_human` with a precise question. Planner or Reviewer may return `non_converged` only with a
+structurally complete investigation showing that no feasible authorized path has been established; the existing
+`symphony:state:non-converged` terminal projection is used. At the planning budget boundary, the host compares
+the structured Planner/Reviewer prerequisite reports for the current and preceding attempt. Exact unchanged
+reports produce the distinct `prerequisite_non_progress` terminal reason; changed reports remain eligible for
+normal review. This deterministic comparison is repetition detection, not a proof that no solution exists.
+
 PM is the only persistent reasoning session. The first PM creates and persists a Codex thread before its
 first turn. Returning PM execution resumes that exact thread through Codex `thread/resume`; a missing,
 unavailable, or mismatched thread fails closed and is operator-visible. Planner, Reviewer, Implementer,
@@ -55,14 +70,14 @@ and lifecycle-label mutations required by the MVP. There is no automatic commit,
 or issue closure; the successful lifecycle leaves the GitHub issue open.
 
 Every role must return one strict `symphony.role-result/v1` JSON object and no surrounding prose. Required
-top-level keys are `schema`, `role`, `outcome`, `summary`, `evidence`, and `findings`; the only optional
-key is `human_question`. Roles are exactly `PM`, `PLANNER`, `REVIEWER`, `IMPLEMENTER`, `ADVERSARY`, or
-`ARCHIVIST`, with these legal outcomes:
+top-level keys are `schema`, `role`, `outcome`, `summary`, `evidence`, and `findings`; `human_question` and
+`prerequisite_resolution` are optional, with the latter limited to PLANNER and REVIEWER. Roles are exactly
+`PM`, `PLANNER`, `REVIEWER`, `IMPLEMENTER`, `ADVERSARY`, or `ARCHIVIST`, with these legal outcomes:
 
 ```text
 PM           plan | converge | await_human
-Planner      plan_ready | await_human
-Reviewer     accept | revise | await_human
+Planner      plan_ready | non_converged | await_human
+Reviewer     accept | revise | non_converged | await_human
 Implementer  implementation_complete | await_human
 Adversary    review_complete | await_human
 Archivist    archive_complete | await_human
@@ -77,6 +92,14 @@ are rejected. The host validates the result and owns all routing decisions.
 Continuity, authority, malformed state, and unavailable required external capabilities fail closed and
 remain visible to the operator. Normal revision, difficult implementation, failed tests, infrastructure
 retry, and budget exhaustion do not hand routine routing back to the human.
+
+The prerequisite report is retained in the same visible JSON lifecycle ledger as the role result. On restart,
+the host reconstructs the preceding correction, attempted resolution, and outstanding evidence frontier from
+that ledger; operational retries do not create lifecycle events or consume planning attempts. The host can
+enforce field shape, report/outcome consistency, transition legality, terminal idempotence, and exact structured
+repetition. It cannot establish that an agent examined every possible mechanism or that two arbitrary prose plans
+are semantically equivalent. Synthetic tests cover these host guarantees; they do not prove exhaustive live agent
+investigation.
 
 ## Runtime configuration and provenance
 

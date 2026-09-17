@@ -11,10 +11,24 @@ defmodule SymphonyElixir.Lifecycle do
 
   @schema "symphony.role-result/v1"
   @required_result_keys ~w(schema role outcome summary evidence findings)
-  @allowed_result_keys ~w(schema role outcome summary evidence findings human_question)
+  @allowed_result_keys ~w(schema role outcome summary evidence findings human_question prerequisite_resolution)
   @finding_keys ~w(severity summary evidence)
+  @prerequisite_resolution_keys ~w(
+    blocked_objective
+    missing_prerequisite
+    absence_evidence
+    authoritative_requirement
+    alternatives
+    authority_status
+    unlock_action
+    resolution_status
+  )
+  @alternative_keys ~w(approach evidence disposition)
+  @alternative_dispositions ~w(available observed_unavailable demonstrated_infeasible unauthorized unexamined inaccessible)
+  @resolution_statuses ~w(resolved unresolved external_prerequisite no_feasible_authorized_path_established)
+  @authority_statuses ~w(within_existing_authority requires_external_action not_resolvable_with_existing_authority not_established)
 
-  @type destination :: RoleProfiles.role() | :await_human | :lifecycle_complete
+  @type destination :: RoleProfiles.role() | :await_human | :lifecycle_complete | :non_converged
   @type pm_phase :: :initial | :returning
 
   @spec validate_result(map()) :: {:ok, map()} | {:error, term()}
@@ -26,6 +40,7 @@ defmodule SymphonyElixir.Lifecycle do
          :ok <- validate_summary(Map.get(result, "summary")),
          :ok <- validate_evidence(Map.get(result, "evidence")),
          :ok <- validate_findings(Map.get(result, "findings")),
+         :ok <- validate_prerequisite_resolution(role, Map.get(result, "prerequisite_resolution")),
          :ok <- validate_human_question(outcome, Map.get(result, "human_question")) do
       {:ok, result}
     end
@@ -61,7 +76,12 @@ defmodule SymphonyElixir.Lifecycle do
   def transition_for_result(result, context \\ %{}) when is_map(context) do
     with {:ok, validated_result} <- validate_result(result),
          {:ok, role} <- canonical_role(validated_result["role"]),
-         {:ok, destination} <- transition(role, validated_result["outcome"], context) do
+         {:ok, destination} <-
+           transition(
+             role,
+             validated_result["outcome"],
+             Map.put(context, :prerequisite_resolution, Map.get(validated_result, "prerequisite_resolution"))
+           ) do
       {:ok,
        %{
          result: validated_result,
@@ -72,6 +92,82 @@ defmodule SymphonyElixir.Lifecycle do
     end
   end
 
+  @spec prerequisite_resolution_complete?(term()) :: boolean()
+  def prerequisite_resolution_complete?(report) when is_map(report) do
+    report["resolution_status"] == "no_feasible_authorized_path_established" and
+      report["authority_status"] == "not_resolvable_with_existing_authority" and
+      is_list(report["alternatives"]) and report["alternatives"] != [] and
+      Enum.all?(report["alternatives"], fn alternative ->
+        is_map(alternative) and alternative["disposition"] not in ["available", "unexamined", "inaccessible"]
+      end)
+  end
+
+  def prerequisite_resolution_complete?(_report), do: false
+
+  @spec prerequisite_progress(map(), map()) :: :not_applicable | :material | :unchanged | :missing
+  def prerequisite_progress(%{events: events, round: round, planning_attempt: attempt}, result)
+      when is_list(events) and is_map(result) do
+    if result["role"] == "REVIEWER" and result["outcome"] == "revise" do
+      current_report = Map.get(result, "prerequisite_resolution")
+      current_signature = planning_attempt_signature(events, round, attempt, current_report)
+      previous_signature = planning_attempt_signature(events, round, attempt - 1, nil)
+
+      cond do
+        is_nil(current_report) and previous_signature != %{} -> :missing
+        is_nil(current_report) -> :not_applicable
+        previous_signature == %{} -> :material
+        current_signature == previous_signature -> :unchanged
+        true -> :material
+      end
+    else
+      :not_applicable
+    end
+  end
+
+  def prerequisite_progress(_history, _result), do: :not_applicable
+
+  @spec prerequisite_context(map()) :: map()
+  def prerequisite_context(%{events: events, current_role: current_role} = state) when is_list(events) do
+    current_round = Map.get(state, :round)
+
+    correction =
+      events
+      |> Enum.reverse()
+      |> Enum.find(fn event ->
+        event["round"] == current_round and
+          event["role"] == "REVIEWER" and
+          event["outcome"] == "revise" and
+          is_map(event["prerequisite_resolution"])
+      end)
+
+    attempted_resolution =
+      if correction do
+        events
+        |> Enum.reverse()
+        |> Enum.find(fn event ->
+          event["round"] == current_round and
+            event["role"] == "PLANNER" and
+            event["planning_attempt"] == correction["planning_attempt"] + 1 and
+            is_map(event["prerequisite_resolution"])
+        end)
+      end
+
+    correction_report = if correction, do: correction["prerequisite_resolution"]
+    attempted_report = if attempted_resolution, do: attempted_resolution["prerequisite_resolution"]
+
+    %{
+      required?: current_role == :planner and is_map(correction_report),
+      preceding_correction: prerequisite_event_snapshot(correction),
+      attempted_resolution: prerequisite_event_snapshot(attempted_resolution),
+      outstanding_evidence_frontier:
+        (correction_report || attempted_report || %{})["authoritative_requirement"] || [],
+      resolution_for_current_role:
+        if current_role == :planner, do: correction_report, else: attempted_report
+    }
+  end
+
+  def prerequisite_context(_state), do: %{}
+
   @spec legal_outcomes(RoleProfiles.role()) :: [String.t()]
   def legal_outcomes(role), do: RoleProfiles.allowed_outcomes(role)
 
@@ -81,6 +177,7 @@ defmodule SymphonyElixir.Lifecycle do
       {:ok, role} ->
         predecessor = predecessor_role(state)
         transition_context = lifecycle_transition_context(state)
+        prerequisite = prerequisite_context(state)
 
         %{
           current_role: RoleProfiles.role_name(role),
@@ -96,7 +193,8 @@ defmodule SymphonyElixir.Lifecycle do
           already_happened: already_happened(role, predecessor),
           not_yet_happened: not_yet_happened(role, predecessor),
           outcome_routes: outcome_routes(role, transition_context),
-          temporal_interpretation: temporal_interpretation(role, predecessor)
+          temporal_interpretation: temporal_interpretation(role, predecessor),
+          prerequisite_context: prerequisite
         }
 
       {:error, _reason} ->
@@ -106,7 +204,26 @@ defmodule SymphonyElixir.Lifecycle do
 
   def lifecycle_context(_state), do: %{}
 
+  defp transition_for(_role, "await_human", %{prerequisite_resolution: nil}), do: {:ok, :await_human}
+
+  defp transition_for(_role, "await_human", %{prerequisite_resolution: report}) when is_map(report) do
+    if report["resolution_status"] == "external_prerequisite" and
+         report["authority_status"] == "requires_external_action" do
+      {:ok, :await_human}
+    else
+      {:error, :await_human_requires_specific_external_prerequisite}
+    end
+  end
+
   defp transition_for(_role, "await_human", _context), do: {:ok, :await_human}
+
+  defp transition_for(role, "non_converged", context) when role in [:planner, :reviewer] do
+    if prerequisite_resolution_complete?(Map.get(context, :prerequisite_resolution)) do
+      {:ok, :non_converged}
+    else
+      {:error, :non_converged_requires_complete_prerequisite_resolution}
+    end
+  end
 
   defp transition_for(:pm, "plan", context) do
     case Map.get(context, :pm_phase, :initial) do
@@ -131,14 +248,33 @@ defmodule SymphonyElixir.Lifecycle do
     end
   end
 
-  defp transition_for(:planner, "plan_ready", _context), do: {:ok, :reviewer}
-  defp transition_for(:reviewer, "revise", _context), do: {:ok, :planner}
+  defp transition_for(:planner, "plan_ready", context) do
+    case Map.get(context, :prerequisite_resolution) do
+      nil -> {:ok, :reviewer}
+      %{"resolution_status" => "resolved"} -> {:ok, :reviewer}
+      _ -> {:error, :plan_ready_has_unresolved_prerequisite}
+    end
+  end
+
+  defp transition_for(:reviewer, "revise", context) do
+    if prerequisite_resolution_complete?(Map.get(context, :prerequisite_resolution)) do
+      {:error, :complete_prerequisite_resolution_requires_non_converged}
+    else
+      {:ok, :planner}
+    end
+  end
 
   defp transition_for(:reviewer, "accept", context) do
-    if blocking_findings?(Map.get(context, :findings, [])) do
-      {:error, :reviewer_accept_has_blocking_findings}
-    else
-      {:ok, :implementer}
+    cond do
+      blocking_findings?(Map.get(context, :findings, [])) ->
+        {:error, :reviewer_accept_has_blocking_findings}
+
+      is_map(Map.get(context, :prerequisite_resolution)) and
+          Map.get(context, :prerequisite_resolution)["resolution_status"] != "resolved" ->
+        {:error, :reviewer_accept_has_unresolved_prerequisite}
+
+      true ->
+        {:ok, :implementer}
     end
   end
 
@@ -222,11 +358,43 @@ defmodule SymphonyElixir.Lifecycle do
   defp validate_summary(_summary), do: {:error, :invalid_role_result_summary}
 
   defp lifecycle_transition_context(state) do
+    prerequisite = prerequisite_context(state)
+
     %{
       pm_phase: Map.get(state, :pm_phase) || :initial,
       completed_working_round?: Map.get(state, :completed_working_round?, false),
       preceding_adversary_findings: Map.get(state, :preceding_adversary_findings, []),
-      findings: []
+      findings: [],
+      prerequisite_resolution: prerequisite[:resolution_for_current_role]
+    }
+  end
+
+  defp planning_attempt_signature(events, round, attempt, current_report) when attempt > 0 do
+    prior =
+      events
+      |> Enum.filter(&(&1["round"] == round and &1["planning_attempt"] == attempt))
+      |> Enum.reduce(%{}, fn event, signature ->
+        case {event["role"], event["prerequisite_resolution"]} do
+          {"PLANNER", report} when is_map(report) -> Map.put(signature, :planner, report)
+          {"REVIEWER", report} when is_map(report) -> Map.put(signature, :reviewer, report)
+          _ -> signature
+        end
+      end)
+
+    if is_map(current_report), do: Map.put(prior, :reviewer, current_report), else: prior
+  end
+
+  defp planning_attempt_signature(_events, _round, _attempt, _current_report), do: %{}
+
+  defp prerequisite_event_snapshot(nil), do: nil
+
+  defp prerequisite_event_snapshot(event) when is_map(event) do
+    %{
+      round: event["round"],
+      planning_attempt: event["planning_attempt"],
+      summary: event["summary"],
+      evidence: event["evidence"],
+      prerequisite_resolution: event["prerequisite_resolution"]
     }
   end
 
@@ -440,6 +608,108 @@ defmodule SymphonyElixir.Lifecycle do
   defp validate_human_question("await_human", _question), do: {:error, :missing_human_question}
   defp validate_human_question(_outcome, nil), do: :ok
   defp validate_human_question(_outcome, _question), do: {:error, :unexpected_human_question}
+
+  defp validate_prerequisite_resolution(_role, nil), do: :ok
+
+  defp validate_prerequisite_resolution(role, report) when role not in [:planner, :reviewer] and is_map(report),
+    do: {:error, {:prerequisite_resolution_not_allowed_for_role, role}}
+
+  defp validate_prerequisite_resolution(role, report) when role in [:planner, :reviewer] and is_map(report) do
+    unknown = Map.keys(report) -- @prerequisite_resolution_keys
+    missing = @prerequisite_resolution_keys -- Map.keys(report)
+
+    cond do
+      unknown != [] -> {:error, {:unknown_prerequisite_resolution_fields, unknown}}
+      missing != [] -> {:error, {:missing_prerequisite_resolution_fields, missing}}
+      true ->
+        with :ok <- validate_non_empty_string(report["blocked_objective"], :blocked_objective),
+             :ok <- validate_non_empty_string(report["missing_prerequisite"], :missing_prerequisite),
+             :ok <- validate_string_list_field(report["absence_evidence"], :absence_evidence),
+             :ok <- validate_string_list_field(report["authoritative_requirement"], :authoritative_requirement),
+             :ok <- validate_alternatives(report["alternatives"]),
+             :ok <- validate_enum(report["authority_status"], @authority_statuses, :authority_status),
+             :ok <- validate_non_empty_string(report["unlock_action"], :unlock_action),
+             :ok <- validate_enum(report["resolution_status"], @resolution_statuses, :resolution_status),
+             :ok <- validate_resolution_consistency(report) do
+          :ok
+        end
+    end
+  end
+
+  defp validate_prerequisite_resolution(_role, _report),
+    do: {:error, :invalid_prerequisite_resolution}
+
+  defp validate_alternatives(alternatives) when is_list(alternatives) and alternatives != [] do
+    Enum.reduce_while(alternatives, :ok, fn alternative, :ok ->
+      if is_map(alternative) do
+        unknown = Map.keys(alternative) -- @alternative_keys
+        missing = @alternative_keys -- Map.keys(alternative)
+
+        cond do
+          unknown != [] -> {:halt, {:error, {:unknown_prerequisite_alternative_fields, unknown}}}
+          missing != [] -> {:halt, {:error, {:missing_prerequisite_alternative_fields, missing}}}
+          true ->
+            case validate_alternative(alternative) do
+              :ok -> {:cont, :ok}
+              {:error, reason} -> {:halt, {:error, reason}}
+            end
+        end
+      else
+        {:halt, {:error, :invalid_prerequisite_alternative}}
+      end
+    end)
+  end
+
+  defp validate_alternatives(_alternatives), do: {:error, :invalid_prerequisite_alternatives}
+
+  defp validate_alternative(alternative) do
+    with :ok <- validate_non_empty_string(alternative["approach"], :alternative_approach),
+         :ok <- validate_string_list_field(alternative["evidence"], :alternative_evidence),
+         :ok <- validate_enum(alternative["disposition"], @alternative_dispositions, :alternative_disposition) do
+      :ok
+    end
+  end
+
+  defp validate_non_empty_string(value, _field) when is_binary(value) do
+    if String.trim(value) == "", do: {:error, :invalid_prerequisite_string}, else: :ok
+  end
+
+  defp validate_non_empty_string(_value, field), do: {:error, {:invalid_prerequisite_field, field}}
+
+  defp validate_string_list_field(value, field) when is_list(value) do
+    if Enum.all?(value, &(is_binary(&1) and String.trim(&1) != "")) do
+      :ok
+    else
+      {:error, {:invalid_prerequisite_list, field}}
+    end
+  end
+
+  defp validate_string_list_field(_value, field), do: {:error, {:invalid_prerequisite_list, field}}
+
+  defp validate_enum(value, allowed, field) do
+    if value in allowed, do: :ok, else: {:error, {:invalid_prerequisite_enum, field, value}}
+  end
+
+  defp validate_resolution_consistency(%{
+         "resolution_status" => "resolved",
+         "authority_status" => "within_existing_authority",
+         "alternatives" => alternatives
+       }) do
+    if Enum.any?(alternatives, &(&1["disposition"] == "available")), do: :ok, else: {:error, :resolved_prerequisite_has_no_available_path}
+  end
+
+  defp validate_resolution_consistency(%{
+         "resolution_status" => "external_prerequisite",
+         "authority_status" => "requires_external_action"
+       }), do: :ok
+
+  defp validate_resolution_consistency(%{"resolution_status" => "no_feasible_authorized_path_established"} = report) do
+    if prerequisite_resolution_complete?(report), do: :ok, else: {:error, :incomplete_prerequisite_non_convergence}
+  end
+
+  defp validate_resolution_consistency(%{"resolution_status" => "unresolved"}), do: :ok
+
+  defp validate_resolution_consistency(_report), do: {:error, :inconsistent_prerequisite_resolution}
 
   defp canonical_role(role) when role in [:pm, :planner, :reviewer, :implementer, :adversary, :archivist],
     do: {:ok, role}

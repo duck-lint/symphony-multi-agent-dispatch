@@ -234,7 +234,8 @@ defmodule SymphonyElixir.LifecycleHistory do
         "summary" => event["summary"],
         "evidence" => event["evidence"],
         "findings" => event["findings"],
-        "human_question" => event["human_question"]
+        "human_question" => event["human_question"],
+        "prerequisite_resolution" => Map.get(event, "prerequisite_resolution")
       }
 
       case Lifecycle.validate_result(result) do
@@ -434,6 +435,17 @@ defmodule SymphonyElixir.LifecycleHistory do
     do: {:error, {:invalid_lifecycle_event_position, expected, %{round: round, planning_attempt: attempt}}}
 
   defp validate_terminal_transition(_state, :archivist, %{"outcome" => "archive_complete", "to_role" => "LIFECYCLE_COMPLETE"}), do: :ok
+
+  defp validate_terminal_transition(_state, role, %{
+         "outcome" => "non_converged",
+         "to_role" => "NON_CONVERGED",
+         "prerequisite_resolution" => report
+       })
+       when role in [:planner, :reviewer] do
+    if Lifecycle.prerequisite_resolution_complete?(report),
+      do: :ok,
+      else: {:error, :incomplete_prerequisite_non_convergence}
+  end
 
   defp validate_terminal_transition(state, :reviewer, %{"outcome" => "revise", "to_role" => "NON_CONVERGED"}) do
     if state.planning_attempt >= 3, do: :ok, else: {:error, :premature_non_convergence}

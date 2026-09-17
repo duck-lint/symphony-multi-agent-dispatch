@@ -115,6 +115,45 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert first_planner_context == second_planner_context
   end
 
+  test "a complete prerequisite investigation can produce a visible non-converged terminal" do
+    lifecycle_id = "life-prerequisite"
+
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{
+        state
+        | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:planner", "human-label"]},
+          comments: [
+            %{"body" => LifecycleHistory.render(LifecycleHistory.start_event(lifecycle_id))},
+            %{
+              "body" =>
+                LifecycleHistory.render(
+                  transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)
+                )
+            }
+          ]
+      }
+    end)
+
+    result =
+      role_result("PLANNER", "non_converged", "No feasible authorized path was established")
+      |> Map.put("prerequisite_resolution", prerequisite_report())
+
+    assert {:ok, %{event: event, history: history, idempotent?: false}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, result)
+
+    assert event["kind"] == "terminal"
+    assert event["terminal_reason"] == "prerequisite_no_feasible_authorized_path"
+    assert event["prerequisite_resolution"] == result["prerequisite_resolution"]
+    assert List.last(history.events) == event
+
+    state = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+    assert "symphony:state:non-converged" in state.issue.labels
+    refute "symphony:auto" in state.issue.labels
+
+    assert {:ok, %{idempotent?: true}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, result)
+  end
+
   test "does not dispatch an opted-out issue" do
     Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
       %{state | issue: %{state.issue | labels: ["symphony:role:pm"]}}
@@ -241,6 +280,25 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       "summary" => summary,
       "evidence" => ["host test evidence"],
       "findings" => []
+    }
+  end
+
+  defp prerequisite_report do
+    %{
+      "blocked_objective" => "Complete the authorized lifecycle change.",
+      "missing_prerequisite" => "A required capability has not been established.",
+      "absence_evidence" => ["The capability was not present in the inspected state."],
+      "authoritative_requirement" => ["The governing task contract requires the capability."],
+      "alternatives" => [
+        %{
+          "approach" => "Use the documented mechanism.",
+          "evidence" => ["The mechanism was inspected and did not establish the prerequisite."],
+          "disposition" => "demonstrated_infeasible"
+        }
+      ],
+      "authority_status" => "not_resolvable_with_existing_authority",
+      "unlock_action" => "Supply evidence or capability for the missing prerequisite.",
+      "resolution_status" => "no_feasible_authorized_path_established"
     }
   end
 

@@ -136,7 +136,7 @@ defmodule SymphonyElixir.RoleProfiles do
       freshness: :fresh,
       thread_policy: :fresh,
       write_authority: :read_only,
-      allowed_outcomes: ["plan_ready", "await_human"],
+      allowed_outcomes: ["plan_ready", "non_converged", "await_human"],
       instructions: """
       ## Role
       You are the planning role in the engineering harness. Your job is to convert intent into an executable plan with explicit seams, approval criteria, and verification obligations. Plan for the implementation shape that realizes the current project intent within current task authority, project invariants, approval boundaries, and verification requirements. Do not optimize by change size, local containment, or other sizing language; use admissibility clarity, reversibility, review burden, and verification cost as risk controls.
@@ -145,6 +145,13 @@ defmodule SymphonyElixir.RoleProfiles do
       - Do not implement the plan.
       - Treat the current user request, open decisions, and active plan as task authority for what should happen now inside that invariant space.
       - If task authority conflicts with invariant authority, return an explicit approval gap instead of planning around the conflict.
+
+      ## Prerequisite resolution
+      When the handoff or lifecycle context identifies an unresolved prerequisite, investigate it before producing another plan. Check governing task authority, existing implementation/configuration, available resources and artifacts, documented mechanisms, reasonable mechanisms implied by the architecture, authorized alternatives, dependency order, and whether the obstacle is planning, implementation, environment provisioning, or an approval boundary.
+
+      Include a `prerequisite_resolution` object in the result while this prerequisite is active. Its report must state the blocked objective, missing prerequisite, absence evidence, authoritative requirement, each material alternative with evidence and one of `available`, `observed_unavailable`, `demonstrated_infeasible`, `unauthorized`, `unexamined`, or `inaccessible`, authority status, smallest unlock action, and resolution status. Do not call an unexamined or inaccessible path impossible.
+
+      Each subsequent planning attempt must add material evidence, examine a newly authorized approach, resolve the prerequisite, or change the executable mechanism. Rewording a plan or repeating a conditional assumption is not progress. Use `plan_ready` only when the report establishes a feasible path. Use `await_human` only for a precise prerequisite controlled outside existing authority. Use `non_converged` only when the report establishes that no feasible authorized path has been established after the relevant available and authorized alternatives have been investigated; this means no path has been established, not that no solution exists anywhere.
 
       ## Planning Rules
       - Before selecting seams, derive or verify the current admissibility report: invariant constraints, task constraints, constraint conflicts, allowed transformation types, affected surfaces, non-affected surfaces, admissibility checks, and stop conditions.
@@ -186,7 +193,7 @@ defmodule SymphonyElixir.RoleProfiles do
       freshness: :fresh,
       thread_policy: :fresh,
       write_authority: :read_only,
-      allowed_outcomes: ["accept", "revise", "await_human"],
+      allowed_outcomes: ["accept", "revise", "non_converged", "await_human"],
       instructions: """
       ## Role
       You are the review role in the engineering harness. Your job is to judge whether a proposed plan satisfies the verification contract without introducing unhandled risk or silently crossing from task authority into invariant-authority change.
@@ -195,6 +202,9 @@ defmodule SymphonyElixir.RoleProfiles do
       Report findings and concrete fixes.
       - Treat the current request, open decisions, and active plan as task authority for what the implementation was supposed to do now.
       - If the implementation or plan appears to use task authority to silently override project invariants, report it as a blocking admissibility failure.
+
+      ## Prerequisite resolution
+      Review the proposed plan as pre-implementation work: the repository should not yet contain the proposed mutations. If a prerequisite blocks feasibility, identify the exact prerequisite, the dependent plan step, the evidence gap, and a falsifiable correction criterion. Include a `prerequisite_resolution` report covering the blocked objective, missing prerequisite, authoritative requirement, relevant alternatives and their evidence/dispositions, authority to resolve it, smallest unlock action, and resolution status. On later reviews compare the report with prior accepted corrections and identify whether new evidence or a materially different feasible approach exists. Do not repeat the same correction without naming the remaining evidence frontier. Do not require execution of acceptance tests that belong to the writable Implementer; require the plan to name those tests and their execution owner.
 
       ## Review Rules
       - Lead with findings ordered by severity.
@@ -207,6 +217,8 @@ defmodule SymphonyElixir.RoleProfiles do
       - If no issues are found, say so and name remaining test gaps or residual risk.
       - Any new enum/category in a contract must map to a deterministic function over current observables—otherwise hard stop to flesh out drift.
       - If requested behavior would require a project-spec or governance amendment that was not explicitly approved, report the missing authority instead of treating the diff as merely incomplete.
+
+      Use `non_converged` only when the report establishes that no feasible authorized path has been established after relevant available and authorized alternatives were investigated. Use `await_human` only when a specific external artifact, authorization, credential, resource, or decision is required and the question precisely requests it. A repeated blocker does not by itself prove infeasibility, and a new feasible approach remains eligible even when blocker wording recurs.
 
       ## Required Output
       Your review result must cover:
@@ -394,8 +406,8 @@ defmodule SymphonyElixir.RoleProfiles do
 
     """
     Return exactly one JSON object and no Markdown or surrounding prose. It must contain these
-    required top-level keys and no other keys unless the human_question rule below permits it:
-    "schema", "role", "outcome", "summary", "evidence", and "findings".
+    required top-level keys and no other keys unless the human_question or prerequisite_resolution
+    rules below permit it: "schema", "role", "outcome", "summary", "evidence", and "findings".
     "schema" must be exactly "symphony.role-result/v1". "role" must be exactly "#{role_name}"
     (one of PM, PLANNER, REVIEWER, IMPLEMENTER, ADVERSARY, or ARCHIVIST). For this #{role_name}
     role, "outcome" must be exactly one of: #{allowed_outcomes}. Do not invent synonyms such as "handoff" or "done".
@@ -406,6 +418,14 @@ defmodule SymphonyElixir.RoleProfiles do
     exactly the JSON string "blocking" or "advisory". Finding "summary" must be a non-empty
     JSON string. Finding "evidence" must be a JSON array of non-empty JSON strings (it may be
     empty). Do not emit next_role or any other unknown field; the host owns all routing decisions.
+    PLANNER and REVIEWER may include "prerequisite_resolution" only when a prerequisite blocks
+    feasibility. It must be an object with exactly these keys: "blocked_objective",
+    "missing_prerequisite", "absence_evidence", "authoritative_requirement", "alternatives",
+    "authority_status", "unlock_action", and "resolution_status". "alternatives" must list
+    each material alternative with exactly "approach", "evidence", and "disposition"; do not
+    treat an unexamined or inaccessible alternative as demonstrated infeasible. The report is
+    evidence for host validation, not routing authority. Omit the field or set it to JSON null
+    when no prerequisite blocks the role's result.
     Include "human_question" only when outcome is "await_human", and then it must be a non-empty
     JSON string. For every other outcome, omit "human_question" or set it to JSON null.
     """
