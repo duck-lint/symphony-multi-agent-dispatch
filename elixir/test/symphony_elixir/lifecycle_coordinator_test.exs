@@ -191,10 +191,11 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
           List.replace_at(ids, 0, "other-life:r1:p1:IMPLEMENTER:implementation_complete"),
           List.replace_at(ids, 0, LifecycleHistory.transition_id(lifecycle_id, 0, 0, :pm, "plan"))
         ] do
-      result = Map.put(valid_base, "reconciliation", %{
-        "considered_transition_ids" => bad_ids,
-        "assessment" => "The current reports were considered."
-      })
+      result =
+        Map.put(valid_base, "reconciliation", %{
+          "considered_transition_ids" => bad_ids,
+          "assessment" => "The current reports were considered."
+        })
 
       assert {:error, _reason} =
                LifecycleCoordinator.commit_role_result(github_issue(), :pm, result)
@@ -262,13 +263,16 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
 
     blocking_events =
       issue_five_round_events("normalize-5-blocked")
-      |> List.update_at(5, &Map.put(&1, "findings", [
-        %{
-          "severity" => "blocking",
-          "summary" => "The adversarial result blocks convergence.",
-          "evidence" => ["The blocking condition remains unresolved."]
-        }
-      ]))
+      |> List.update_at(
+        5,
+        &Map.put(&1, "findings", [
+          %{
+            "severity" => "blocking",
+            "summary" => "The adversarial result blocks convergence.",
+            "evidence" => ["The blocking condition remains unresolved."]
+          }
+        ])
+      )
 
     install_returning_pm_history(blocking_events)
 
@@ -454,10 +458,11 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     end)
   end
 
-  defp reconciliation_payload(%{required_transition_ids: ids}), do: %{
-    "considered_transition_ids" => ids,
-    "assessment" => "The reports are both retained with distinct provenance; the independent run did not establish an application assertion failure."
-  }
+  defp reconciliation_payload(%{required_transition_ids: ids}),
+    do: %{
+      "considered_transition_ids" => ids,
+      "assessment" => "The reports are both retained with distinct provenance; the independent run did not establish an application assertion failure."
+    }
 
   defp issue_five_round_events(lifecycle_id) do
     [

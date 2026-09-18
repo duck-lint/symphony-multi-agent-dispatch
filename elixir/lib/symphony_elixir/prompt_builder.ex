@@ -17,40 +17,16 @@ defmodule SymphonyElixir.PromptBuilder do
     lifecycle_context = Map.get(context, :lifecycle_context)
     correction_feedback = Map.get(context, :correction_feedback)
 
-    runtime_authority_section =
-      case runtime_authority do
-        nil -> ""
-        authority -> "\nHost-enforced runtime authority:\n#{format_context(authority)}\n"
-      end
-
-    lifecycle_context_section =
-      case lifecycle_context do
-        nil -> ""
-        context -> "\nHost-derived lifecycle context:\n#{format_context(context)}\n"
-      end
-
-    reconciliation_section =
-      case handoff && Map.get(handoff, :reconciliation) do
-        nil -> ""
-        reconciliation -> "\nHost-projected evidence reconciliation (accepted event data; not a semantic verdict):\n#{format_context(reconciliation)}\n"
-      end
-
-    correction_feedback_section =
-      case correction_feedback do
-        nil -> ""
-        feedback -> "\nHost correction diagnostic (the prior result was not committed; correct the result contract only):\n#{format_context(feedback)}\n"
-      end
-
     """
     You are executing the SYMPHONY role #{profile.name}.
 
     Role instructions:
     #{String.trim(profile.instructions)}
 
-    #{runtime_authority_section}
-    #{lifecycle_context_section}
-    #{reconciliation_section}
-    #{correction_feedback_section}
+    #{optional_context_section("Host-enforced runtime authority", runtime_authority)}
+    #{optional_context_section("Host-derived lifecycle context", lifecycle_context)}
+    #{reconciliation_section(handoff)}
+    #{optional_context_section("Host correction diagnostic (the prior result was not committed; correct the result contract only)", correction_feedback)}
     #{RoleProfiles.result_contract_instructions(profile.role)}
 
     Host-supplied handoff/context:
@@ -70,6 +46,27 @@ defmodule SymphonyElixir.PromptBuilder do
   defp format_context(nil), do: "No additional handoff was supplied."
   defp format_context(context) when is_binary(context), do: context
   defp format_context(context), do: inspect(context, pretty: true)
+
+  defp handoff_reconciliation(%{reconciliation: reconciliation}), do: reconciliation
+  defp handoff_reconciliation(_handoff), do: nil
+
+  defp optional_context_section(_label, nil), do: ""
+
+  defp optional_context_section(label, context),
+    do: "\n#{label}:\n#{format_context(context)}\n"
+
+  defp reconciliation_section(handoff) do
+    case handoff_reconciliation(handoff) do
+      nil ->
+        ""
+
+      reconciliation ->
+        optional_context_section(
+          "Host-projected evidence reconciliation (accepted event data; not a semantic verdict)",
+          reconciliation
+        )
+    end
+  end
 
   defp profile_for(role, %{role: role} = profile), do: profile
 

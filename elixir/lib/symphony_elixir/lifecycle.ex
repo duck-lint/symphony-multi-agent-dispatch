@@ -52,11 +52,11 @@ defmodule SymphonyElixir.Lifecycle do
          {:ok, outcome} <- validate_result_outcome(role, Map.get(result, "outcome")),
          :ok <- validate_summary(Map.get(result, "summary")),
          :ok <- validate_evidence(Map.get(result, "evidence")),
-          :ok <- validate_findings(Map.get(result, "findings")),
-          :ok <- validate_prerequisite_resolution(role, Map.get(result, "prerequisite_resolution")),
-          :ok <- validate_human_question(outcome, Map.get(result, "human_question")),
-          :ok <- validate_reconciliation(role, Map.get(result, "reconciliation")),
-          :ok <- validate_escalation_basis(role, outcome, Map.get(result, "escalation_basis")) do
+         :ok <- validate_findings(Map.get(result, "findings")),
+         :ok <- validate_prerequisite_resolution(role, Map.get(result, "prerequisite_resolution")),
+         :ok <- validate_human_question(outcome, Map.get(result, "human_question")),
+         :ok <- validate_reconciliation(role, Map.get(result, "reconciliation")),
+         :ok <- validate_escalation_basis(role, outcome, Map.get(result, "escalation_basis")) do
       {:ok, result}
     end
   end
@@ -120,52 +120,36 @@ defmodule SymphonyElixir.Lifecycle do
   def prerequisite_resolution_complete?(_report), do: false
 
   @spec prerequisite_progress(map(), map()) :: :not_applicable | :material | :unchanged | :missing
-  def prerequisite_progress(%{events: events, round: round, planning_attempt: attempt}, result)
-      when is_list(events) and is_map(result) do
-    if result["role"] == "REVIEWER" and result["outcome"] == "revise" do
-      current_report = Map.get(result, "prerequisite_resolution")
-      current_signature = planning_attempt_signature(events, round, attempt, current_report)
-      previous_signature = planning_attempt_signature(events, round, attempt - 1, nil)
+  def prerequisite_progress(
+        %{events: events, round: round, planning_attempt: attempt},
+        %{"role" => "REVIEWER", "outcome" => "revise"} = result
+      )
+      when is_list(events) do
+    current_report = Map.get(result, "prerequisite_resolution")
+    current_signature = planning_attempt_signature(events, round, attempt, current_report)
+    previous_signature = planning_attempt_signature(events, round, attempt - 1, nil)
 
-      cond do
-        is_nil(current_report) and previous_signature != %{} -> :missing
-        is_nil(current_report) -> :not_applicable
-        previous_signature == %{} -> :material
-        current_signature == previous_signature -> :unchanged
-        true -> :material
-      end
-    else
-      :not_applicable
-    end
+    prerequisite_progress_for_reports(current_report, current_signature, previous_signature)
   end
 
   def prerequisite_progress(_history, _result), do: :not_applicable
+
+  defp prerequisite_progress_for_reports(current_report, current_signature, previous_signature) do
+    cond do
+      is_nil(current_report) and previous_signature != %{} -> :missing
+      is_nil(current_report) -> :not_applicable
+      previous_signature == %{} -> :material
+      current_signature == previous_signature -> :unchanged
+      true -> :material
+    end
+  end
 
   @spec prerequisite_context(map()) :: map()
   def prerequisite_context(%{events: events, current_role: current_role} = state) when is_list(events) do
     current_round = Map.get(state, :round)
 
-    correction =
-      events
-      |> Enum.reverse()
-      |> Enum.find(fn event ->
-        event["round"] == current_round and
-          event["role"] == "REVIEWER" and
-          event["outcome"] == "revise" and
-          is_map(event["prerequisite_resolution"])
-      end)
-
-    attempted_resolution =
-      if correction do
-        events
-        |> Enum.reverse()
-        |> Enum.find(fn event ->
-          event["round"] == current_round and
-            event["role"] == "PLANNER" and
-            event["planning_attempt"] == correction["planning_attempt"] + 1 and
-            is_map(event["prerequisite_resolution"])
-        end)
-      end
+    correction = find_prerequisite_event(events, current_round, "REVIEWER", "revise")
+    attempted_resolution = find_attempted_resolution(events, current_round, correction)
 
     correction_report = if correction, do: correction["prerequisite_resolution"]
     attempted_report = if attempted_resolution, do: attempted_resolution["prerequisite_resolution"]
@@ -180,6 +164,32 @@ defmodule SymphonyElixir.Lifecycle do
   end
 
   def prerequisite_context(_state), do: %{}
+
+  defp find_prerequisite_event(events, current_round, role, outcome) do
+    Enum.find(Enum.reverse(events), fn event ->
+      event["round"] == current_round and
+        event["role"] == role and
+        event["outcome"] == outcome and
+        is_map(event["prerequisite_resolution"])
+    end)
+  end
+
+  defp find_attempted_resolution(_events, _current_round, nil), do: nil
+
+  defp find_attempted_resolution(events, current_round, correction) do
+    required_attempt = correction["planning_attempt"] + 1
+    Enum.find(Enum.reverse(events), &attempted_resolution_event?(&1, current_round, required_attempt))
+  end
+
+  defp attempted_resolution_event?(
+         %{"round" => round, "role" => "PLANNER", "planning_attempt" => attempt, "prerequisite_resolution" => report},
+         current_round,
+         required_attempt
+       )
+       when round == current_round and attempt == required_attempt and is_map(report),
+       do: true
+
+  defp attempted_resolution_event?(_event, _current_round, _required_attempt), do: false
 
   @spec legal_outcomes(RoleProfiles.role()) :: [String.t()]
   def legal_outcomes(role), do: RoleProfiles.allowed_outcomes(role)
@@ -537,6 +547,9 @@ defmodule SymphonyElixir.Lifecycle do
   defp temporal_interpretation(:pm, :adversary),
     do: "Returning PM integrates completed working-round evidence and decides another plan or convergence."
 
+  defp temporal_interpretation(:pm, _predecessor),
+    do: "PM is integrating lifecycle context from the current preceding role."
+
   defp temporal_interpretation(:planner, :reviewer),
     do: "Produce a corrected proposed plan; implementation remains absent until a Reviewer accepts a plan."
 
@@ -631,11 +644,7 @@ defmodule SymphonyElixir.Lifecycle do
     cond do
       unknown != [] -> {:error, {:unknown_reconciliation_fields, unknown}}
       missing != [] -> {:error, {:missing_reconciliation_fields, missing}}
-      true ->
-        with :ok <- validate_unique_string_list(reconciliation["considered_transition_ids"], :considered_transition_ids),
-             :ok <- validate_non_empty_string(reconciliation["assessment"], :assessment) do
-          :ok
-        end
+      true -> validate_reconciliation_values(reconciliation)
     end
   end
 
@@ -651,12 +660,7 @@ defmodule SymphonyElixir.Lifecycle do
     cond do
       unknown != [] -> {:error, {:unknown_escalation_basis_fields, unknown}}
       missing != [] -> {:error, {:missing_escalation_basis_fields, missing}}
-      true ->
-        with :ok <- validate_non_empty_string(basis["required_external_action"], :required_external_action),
-             :ok <- validate_non_empty_string(basis["existing_authority_gap"], :existing_authority_gap),
-             :ok <- validate_unique_string_list(basis["supporting_transition_ids"], :supporting_transition_ids) do
-          :ok
-        end
+      true -> validate_escalation_basis_values(basis)
     end
   end
 
@@ -699,9 +703,8 @@ defmodule SymphonyElixir.Lifecycle do
              :ok <- validate_alternatives(report["alternatives"]),
              :ok <- validate_enum(report["authority_status"], @authority_statuses, :authority_status),
              :ok <- validate_non_empty_string(report["unlock_action"], :unlock_action),
-             :ok <- validate_enum(report["resolution_status"], @resolution_statuses, :resolution_status),
-             :ok <- validate_resolution_consistency(report) do
-          :ok
+             :ok <- validate_enum(report["resolution_status"], @resolution_statuses, :resolution_status) do
+          validate_resolution_consistency(report)
         end
     end
   end
@@ -711,25 +714,9 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp validate_alternatives(alternatives) when is_list(alternatives) and alternatives != [] do
     Enum.reduce_while(alternatives, :ok, fn alternative, :ok ->
-      if is_map(alternative) do
-        unknown = Map.keys(alternative) -- @alternative_keys
-        missing = @alternative_keys -- Map.keys(alternative)
-
-        cond do
-          unknown != [] ->
-            {:halt, {:error, {:unknown_prerequisite_alternative_fields, unknown}}}
-
-          missing != [] ->
-            {:halt, {:error, {:missing_prerequisite_alternative_fields, missing}}}
-
-          true ->
-            case validate_alternative(alternative) do
-              :ok -> {:cont, :ok}
-              {:error, reason} -> {:halt, {:error, reason}}
-            end
-        end
-      else
-        {:halt, {:error, :invalid_prerequisite_alternative}}
+      case validate_alternative_fields(alternative) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
@@ -738,11 +725,36 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp validate_alternative(alternative) do
     with :ok <- validate_non_empty_string(alternative["approach"], :alternative_approach),
-         :ok <- validate_string_list_field(alternative["evidence"], :alternative_evidence),
-         :ok <- validate_enum(alternative["disposition"], @alternative_dispositions, :alternative_disposition) do
-      :ok
+         :ok <- validate_string_list_field(alternative["evidence"], :alternative_evidence) do
+      validate_enum(alternative["disposition"], @alternative_dispositions, :alternative_disposition)
     end
   end
+
+  defp validate_reconciliation_values(reconciliation) do
+    with :ok <- validate_unique_string_list(reconciliation["considered_transition_ids"], :considered_transition_ids) do
+      validate_non_empty_string(reconciliation["assessment"], :assessment)
+    end
+  end
+
+  defp validate_escalation_basis_values(basis) do
+    with :ok <- validate_non_empty_string(basis["required_external_action"], :required_external_action),
+         :ok <- validate_non_empty_string(basis["existing_authority_gap"], :existing_authority_gap) do
+      validate_unique_string_list(basis["supporting_transition_ids"], :supporting_transition_ids)
+    end
+  end
+
+  defp validate_alternative_fields(alternative) when is_map(alternative) do
+    unknown = Map.keys(alternative) -- @alternative_keys
+    missing = @alternative_keys -- Map.keys(alternative)
+
+    cond do
+      unknown != [] -> {:error, {:unknown_prerequisite_alternative_fields, unknown}}
+      missing != [] -> {:error, {:missing_prerequisite_alternative_fields, missing}}
+      true -> validate_alternative(alternative)
+    end
+  end
+
+  defp validate_alternative_fields(_alternative), do: {:error, :invalid_prerequisite_alternative}
 
   defp validate_non_empty_string(value, _field) when is_binary(value) do
     if String.trim(value) == "", do: {:error, :invalid_prerequisite_string}, else: :ok

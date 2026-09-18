@@ -91,20 +91,19 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   @spec block_role_result_contract(Issue.t(), term(), keyword()) :: {:ok, Issue.t()} | {:error, term()}
   def block_role_result_contract(%Issue{id: issue_id}, reason, _opts \\ [])
       when is_binary(issue_id) do
-    if github_tracker?() do
-      with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
-           :ok <- validate_active_issue(current_issue),
-           :ok <- validate_opt_in(current_issue) do
-        case block_invalid_state(current_issue, nil, {:role_result_contract_exhausted, reason}) do
-          {:skip, _blocked} ->
-            {:ok, current_issue}
+    if github_tracker?(),
+      do: block_role_result_contract_on_github(issue_id, reason),
+      else: {:error, :lifecycle_requires_github_tracker}
+  end
 
-          {:error, _reason} = error ->
-            error
-        end
+  defp block_role_result_contract_on_github(issue_id, reason) do
+    with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
+         :ok <- validate_active_issue(current_issue),
+         :ok <- validate_opt_in(current_issue) do
+      case block_invalid_state(current_issue, nil, {:role_result_contract_exhausted, reason}) do
+        {:skip, _blocked} -> {:ok, current_issue}
+        {:error, _reason} = error -> error
       end
-    else
-      {:error, :lifecycle_requires_github_tracker}
     end
   end
 
@@ -136,16 +135,27 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp commit_with_history(current_issue, history, expected_role, result) do
-    with {:ok, validated_result} <- validate_expected_result(result, expected_role),
-         :ok <- validate_evidence_reconciliation(history, validated_result),
-         idempotent <- idempotent_result(history, current_issue, validated_result, expected_role) do
-      case idempotent do
-        {:ok, _commit} = ok ->
-          ok
+    case validate_expected_result(result, expected_role) do
+      {:ok, validated_result} ->
+        commit_validated_result(current_issue, history, expected_role, validated_result)
 
-        :not_found ->
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp commit_validated_result(current_issue, history, expected_role, validated_result) do
+    case idempotent_result(history, current_issue, validated_result, expected_role) do
+      {:ok, _commit} = ok ->
+        ok
+
+      :not_found ->
+        with :ok <- validate_evidence_reconciliation(history, validated_result) do
           persist_new_transition(current_issue, history, expected_role, validated_result)
-      end
+        end
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -230,15 +240,15 @@ defmodule SymphonyElixir.LifecycleCoordinator do
          result: %{
            "schema" => event["role_result_schema"],
            "role" => event["role"],
-            "outcome" => outcome,
-            "summary" => event["summary"],
-            "evidence" => event["evidence"],
-            "findings" => event["findings"],
-            "human_question" => event["human_question"],
-            "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
-            "reconciliation" => Map.get(event, "reconciliation"),
-            "escalation_basis" => Map.get(event, "escalation_basis")
-          }
+           "outcome" => outcome,
+           "summary" => event["summary"],
+           "evidence" => event["evidence"],
+           "findings" => event["findings"],
+           "human_question" => event["human_question"],
+           "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
+           "reconciliation" => Map.get(event, "reconciliation"),
+           "escalation_basis" => Map.get(event, "escalation_basis")
+         }
        }}
     end
   end
@@ -449,25 +459,48 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     report = Map.get(result, "prerequisite_resolution")
     outcome = result["outcome"]
 
-    cond do
-      prerequisite_context[:required?] and not is_map(report) ->
-        {:error, :missing_prerequisite_resolution_report}
-
-      outcome == "plan_ready" and is_map(report) and report["resolution_status"] != "resolved" ->
-        {:error, :plan_ready_has_unresolved_prerequisite}
-
-      outcome == "await_human" and is_map(report) and
-          not (report["resolution_status"] == "external_prerequisite" and
-                   report["authority_status"] == "requires_external_action") ->
-        {:error, :await_human_requires_specific_external_prerequisite}
-
-      outcome == "non_converged" and not Lifecycle.prerequisite_resolution_complete?(report) ->
-        {:error, :non_converged_requires_complete_prerequisite_resolution}
-
-      true ->
-        :ok
+    with :ok <- validate_required_prerequisite(prerequisite_context, report),
+         :ok <- validate_plan_ready_prerequisite(outcome, report),
+         :ok <- validate_await_human_prerequisite(outcome, report) do
+      validate_non_converged_prerequisite(outcome, report)
     end
   end
+
+  defp validate_required_prerequisite(%{required?: true}, report) when not is_map(report),
+    do: {:error, :missing_prerequisite_resolution_report}
+
+  defp validate_required_prerequisite(_context, _report), do: :ok
+
+  defp validate_plan_ready_prerequisite("plan_ready", report) when is_map(report) do
+    if report["resolution_status"] == "resolved" do
+      :ok
+    else
+      {:error, :plan_ready_has_unresolved_prerequisite}
+    end
+  end
+
+  defp validate_plan_ready_prerequisite(_outcome, _report), do: :ok
+
+  defp validate_await_human_prerequisite("await_human", report) when is_map(report) do
+    if report["resolution_status"] == "external_prerequisite" and
+         report["authority_status"] == "requires_external_action" do
+      :ok
+    else
+      {:error, :await_human_requires_specific_external_prerequisite}
+    end
+  end
+
+  defp validate_await_human_prerequisite(_outcome, _report), do: :ok
+
+  defp validate_non_converged_prerequisite("non_converged", report) do
+    if Lifecycle.prerequisite_resolution_complete?(report) do
+      :ok
+    else
+      {:error, :non_converged_requires_complete_prerequisite_resolution}
+    end
+  end
+
+  defp validate_non_converged_prerequisite(_outcome, _report), do: :ok
 
   defp transition_for_commit(history, result) do
     prerequisite_context = Lifecycle.prerequisite_context(history)
@@ -494,22 +527,53 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp validate_evidence_reconciliation(history, %{"role" => "PM"} = result) do
-    with :ok <- validate_pm_escalation_basis(result) do
-      case LifecycleEvidence.project(history) do
-        nil ->
-          validate_initial_pm_references(result)
-
-        %{accepted_events: accepted_events, required_transition_ids: required_ids} = projection ->
-          with :ok <- validate_completed_round_evidence(projection),
-               :ok <- validate_exact_reconciliation_ids(result["reconciliation"], required_ids),
-               :ok <- validate_escalation_evidence(result, accepted_events) do
-            :ok
-          end
-      end
+    case validate_pm_escalation_basis(result) do
+      :ok -> validate_pm_reconciliation(history, result)
+      {:error, _reason} = error -> error
     end
   end
 
   defp validate_evidence_reconciliation(_history, _result), do: :ok
+
+  defp validate_pm_reconciliation(history, result) do
+    case reconciliation_projection(history, result) do
+      nil ->
+        validate_initial_pm_references(result)
+
+      %{accepted_events: accepted_events, required_transition_ids: required_ids} = projection ->
+        validate_projected_pm_reconciliation(result, projection, accepted_events, required_ids)
+    end
+  end
+
+  defp validate_projected_pm_reconciliation(result, projection, accepted_events, required_ids) do
+    with :ok <- validate_completed_round_evidence(projection),
+         :ok <- validate_exact_reconciliation_ids(result["reconciliation"], required_ids) do
+      validate_escalation_evidence(result, accepted_events)
+    end
+  end
+
+  defp reconciliation_projection(history, result) do
+    case LifecycleEvidence.project(history) do
+      nil ->
+        case replayed_pm_round(history, result) do
+          nil -> nil
+          round -> LifecycleEvidence.project_for_round(history, round)
+        end
+
+      projection ->
+        projection
+    end
+  end
+
+  defp replayed_pm_round(%{events: events}, %{"outcome" => outcome}) when is_list(events) do
+    Enum.find_value(events, fn event ->
+      if event["role"] == "PM" and event["outcome"] == outcome and is_integer(event["round"]) do
+        event["round"]
+      end
+    end)
+  end
+
+  defp replayed_pm_round(_history, _result), do: nil
 
   defp validate_pm_escalation_basis(%{"outcome" => "await_human", "escalation_basis" => basis})
        when is_map(basis),
@@ -591,13 +655,14 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   defp apply_budget(history, %{"role" => role_name, "outcome" => "revise"} = result, transition, position) do
     with {:ok, :reviewer} <- canonical_role(role_name) do
       if history.planning_attempt >= 3 do
-        reason =
-          case Lifecycle.prerequisite_progress(history, result) do
-            :unchanged -> "prerequisite_non_progress"
-            _ -> "planning_attempt_exhausted"
-          end
-
-        {:ok, non_converged_transition(history, result, transition, position, reason)}
+        {:ok,
+         non_converged_transition(
+           history,
+           result,
+           transition,
+           position,
+           planning_exhaustion_reason(history, result)
+         )}
       else
         {:ok, Map.put(transition, :kind, "transition")}
       end
@@ -624,6 +689,13 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
   defp apply_budget(_history, _result, transition, _position),
     do: {:ok, Map.put(transition, :kind, "transition")}
+
+  defp planning_exhaustion_reason(history, result) do
+    case Lifecycle.prerequisite_progress(history, result) do
+      :unchanged -> "prerequisite_non_progress"
+      _ -> "planning_attempt_exhausted"
+    end
+  end
 
   defp non_converged_transition(_history, result, transition, position, reason) do
     transition

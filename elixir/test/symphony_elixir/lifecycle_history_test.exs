@@ -118,6 +118,15 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     finding = %{"severity" => "advisory", "summary" => "valid", "evidence" => ["observed"]}
     assert {:ok, _} = parse_event(Map.put(base, "findings", [finding]))
     assert {:error, :invalid_lifecycle_event_findings} = parse_event(Map.put(base, "findings", [Map.put(finding, "summary", " ")]))
+
+    assert {:error, {:invalid_lifecycle_role_result, :invalid_role_result_summary}} =
+             parse_event(Map.put(base, "summary", 12))
+
+    assert {:error, :invalid_lifecycle_terminal_reason} =
+             parse_event(Map.put(terminal, "terminal_reason", " "))
+
+    assert {:error, :invalid_lifecycle_terminal_reason} =
+             parse_event(Map.put(terminal, "terminal_reason", 12))
   end
 
   test "projection handles blocked, escalated, terminal, and converged lifecycles" do

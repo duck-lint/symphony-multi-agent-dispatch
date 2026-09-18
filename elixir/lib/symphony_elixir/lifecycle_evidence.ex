@@ -22,32 +22,35 @@ defmodule SymphonyElixir.LifecycleEvidence do
         current_role: :pm,
         pm_phase: :returning,
         completed_working_round?: true
-      }), do: true
+      }),
+      do: true
 
   def returning_pm?(_history), do: false
 
   @spec project(map()) :: projection() | nil
   def project(%{events: events} = history) when is_list(events) do
     if returning_pm?(history) do
-      lifecycle_id = history.lifecycle_id
-      round = history.round
-
-      accepted_events =
-        events
-        |> Enum.filter(fn event ->
-          event["lifecycle_id"] == lifecycle_id and
-            event["round"] == round and
-            event["role"] in @specialist_roles
-        end)
-
-      %{
-        lifecycle_id: lifecycle_id,
-        round: round,
-        accepted_events: accepted_events,
-        required_transition_ids: Enum.map(accepted_events, & &1["transition_id"])
-      }
+      project_for_round(history, history.round)
     end
   end
 
   def project(_history), do: nil
+
+  @spec project_for_round(map(), non_neg_integer()) :: projection()
+  def project_for_round(%{lifecycle_id: lifecycle_id, events: events}, round)
+      when is_binary(lifecycle_id) and is_list(events) and is_integer(round) do
+    accepted_events =
+      Enum.filter(events, fn event ->
+        event["lifecycle_id"] == lifecycle_id and
+          event["round"] == round and
+          event["role"] in @specialist_roles
+      end)
+
+    %{
+      lifecycle_id: lifecycle_id,
+      round: round,
+      accepted_events: accepted_events,
+      required_transition_ids: Enum.map(accepted_events, & &1["transition_id"])
+    }
+  end
 end

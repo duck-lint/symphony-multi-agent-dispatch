@@ -274,7 +274,13 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, reason} ->
         if role == :pm and LifecycleCoordinator.correctable_role_result_error?(reason) do
-          retry_pm_contract_correction(state, issue_id, running_entry, session_id, reason)
+          retry_pm_contract_correction(
+            state,
+            issue_id,
+            running_entry,
+            running_entry_session_id(running_entry),
+            reason
+          )
         else
           Logger.warning(
             "Unable to commit SYMPHONY lifecycle transition for issue_id=#{issue_id}; " <>
@@ -1240,36 +1246,34 @@ defmodule SymphonyElixir.Orchestrator do
             state
 
           worker_host ->
-            spawn_issue_on_worker_host(
-              state,
-              issue,
-              attempt,
-              recipient,
-              worker_host,
-              role_profile.role,
-              role_profile,
-              handoff,
-              lifecycle_context,
-              correction_feedback,
-              correction_attempt
-            )
+            spawn_issue_on_worker_host(state, issue, %{
+              attempt: attempt,
+              recipient: recipient,
+              worker_host: worker_host,
+              role: role_profile.role,
+              role_profile: role_profile,
+              handoff: handoff,
+              lifecycle_context: lifecycle_context,
+              correction_feedback: correction_feedback,
+              correction_attempt: correction_attempt
+            })
         end
     end
   end
 
-  defp spawn_issue_on_worker_host(
-         %State{} = state,
-         issue,
-         attempt,
-         recipient,
-         worker_host,
-         role,
-         role_profile,
-         handoff,
-         lifecycle_context,
-         correction_feedback,
-         correction_attempt
-       ) do
+  defp spawn_issue_on_worker_host(%State{} = state, issue, dispatch) do
+    %{
+      attempt: attempt,
+      recipient: recipient,
+      worker_host: worker_host,
+      role: role,
+      role_profile: role_profile,
+      handoff: handoff,
+      lifecycle_context: lifecycle_context,
+      correction_feedback: correction_feedback,
+      correction_attempt: correction_attempt
+    } = dispatch
+
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
            AgentRunner.run(
              issue,
@@ -1278,10 +1282,10 @@ defmodule SymphonyElixir.Orchestrator do
              worker_host: worker_host,
              role: role,
              role_profile: role_profile,
-              handoff: handoff,
-              lifecycle_context: lifecycle_context,
-              correction_feedback: correction_feedback,
-              lifecycle_id: Map.get(handoff, :lifecycle_id),
+             handoff: handoff,
+             lifecycle_context: lifecycle_context,
+             correction_feedback: correction_feedback,
+             lifecycle_id: Map.get(handoff, :lifecycle_id),
              pm_phase: Map.get(handoff, :pm_phase)
            )
          end) do

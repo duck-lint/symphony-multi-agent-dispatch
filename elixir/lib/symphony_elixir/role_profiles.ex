@@ -431,22 +431,23 @@ defmodule SymphonyElixir.RoleProfiles do
     """
 
     if role == :pm do
-      contract <> """
-      PM reconciliation contract:
-      - When the host-derived lifecycle context says the PM is returning after a completed working
-        round, include a "reconciliation" object with exactly "considered_transition_ids" and
-        "assessment". The IDs must be copied from the host-supplied reconciliation projection in
-        its displayed order; do not invent, duplicate, omit, or replace an ID. "assessment" is your
-        interpretation of the reports and their evidentiary limits, not host proof of semantic correctness.
-      - When the PM is initial, "reconciliation" may be omitted or null because no specialist evidence
-        exists yet.
-      - Whenever outcome is "await_human", include an "escalation_basis" object with exactly
-        "required_external_action", "existing_authority_gap", and "supporting_transition_ids".
-        The first two values must state the precise external action and why current authority cannot
-        supply it. Initial PM may use an empty supporting ID array; returning PM must cite accepted
-        evidence from the current working round. The host checks provenance and shape, not whether
-        your interpretation is correct.
-      """
+      contract <>
+        """
+        PM reconciliation contract:
+        - When the host-derived lifecycle context says the PM is returning after a completed working
+          round, include a "reconciliation" object with exactly "considered_transition_ids" and
+          "assessment". The IDs must be copied from the host-supplied reconciliation projection in
+          its displayed order; do not invent, duplicate, omit, or replace an ID. "assessment" is your
+          interpretation of the reports and their evidentiary limits, not host proof of semantic correctness.
+        - When the PM is initial, "reconciliation" may be omitted or null because no specialist evidence
+          exists yet.
+        - Whenever outcome is "await_human", include an "escalation_basis" object with exactly
+          "required_external_action", "existing_authority_gap", and "supporting_transition_ids".
+          The first two values must state the precise external action and why current authority cannot
+          supply it. Initial PM may use an empty supporting ID array; returning PM must cite accepted
+          evidence from the current working round. The host checks provenance and shape, not whether
+          your interpretation is correct.
+        """
     else
       contract
     end

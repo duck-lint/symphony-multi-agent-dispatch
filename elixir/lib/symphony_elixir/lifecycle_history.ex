@@ -215,11 +215,9 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   defp validate_kind_fields(%{"kind" => kind} = event) when kind in ["transition", "terminal", "escalation", "blocked"] do
     with :ok <- validate_common_event_fields(event),
-         :ok <- validate_event_lists(event) do
-      with :ok <- validate_event_numbers(event),
-           :ok <- validate_event_role_result(event) do
-        :ok
-      end
+         :ok <- validate_event_lists(event),
+         :ok <- validate_event_numbers(event) do
+      validate_event_role_result(event)
     end
   end
 
@@ -233,12 +231,12 @@ defmodule SymphonyElixir.LifecycleHistory do
         "outcome" => event["outcome"],
         "summary" => event["summary"],
         "evidence" => event["evidence"],
-         "findings" => event["findings"],
-         "human_question" => event["human_question"],
-         "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
-         "reconciliation" => Map.get(event, "reconciliation"),
-         "escalation_basis" => Map.get(event, "escalation_basis")
-       }
+        "findings" => event["findings"],
+        "human_question" => event["human_question"],
+        "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
+        "reconciliation" => Map.get(event, "reconciliation"),
+        "escalation_basis" => Map.get(event, "escalation_basis")
+      }
 
       case Lifecycle.validate_result(result) do
         {:ok, _validated} -> validate_terminal_reason(event["terminal_reason"])

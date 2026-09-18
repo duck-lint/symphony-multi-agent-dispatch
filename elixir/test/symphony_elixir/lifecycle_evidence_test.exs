@@ -46,6 +46,23 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
     assert {:ok, history} = LifecycleHistory.project([LifecycleHistory.start_event("initial")])
     refute LifecycleEvidence.returning_pm?(history)
     assert LifecycleEvidence.project(history) == nil
+    assert LifecycleEvidence.project(:not_a_history) == nil
+  end
+
+  test "round projection preserves only matching lifecycle specialist events" do
+    history = %{
+      lifecycle_id: "life-current",
+      events: [
+        %{"lifecycle_id" => "other-life", "round" => 1, "role" => "IMPLEMENTER"},
+        %{"lifecycle_id" => "life-current", "round" => 2, "role" => "ADVERSARY"},
+        %{"lifecycle_id" => "life-current", "round" => 1, "role" => "IMPLEMENTER"},
+        %{"lifecycle_id" => "life-current", "round" => 1, "role" => "OTHER"}
+      ]
+    }
+
+    projection = LifecycleEvidence.project_for_round(history, 1)
+    assert Enum.map(projection.accepted_events, & &1["role"]) == ["IMPLEMENTER"]
+    assert projection.required_transition_ids == [nil]
   end
 
   defp transition_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt) do

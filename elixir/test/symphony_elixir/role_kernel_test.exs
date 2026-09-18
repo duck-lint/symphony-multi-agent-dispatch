@@ -570,6 +570,173 @@ defmodule SymphonyElixir.RoleKernelTest do
              Lifecycle.transition_for_result(transition_result)
   end
 
+  test "role contract edge cases remain explicitly validated" do
+    pm_plan = valid_result("PM", "plan")
+
+    base_reconciliation = %{
+      "considered_transition_ids" => ["life:r1:p1:IMPLEMENTER:implementation_complete"],
+      "assessment" => "The accepted report was considered."
+    }
+
+    assert {:error, {:unknown_reconciliation_fields, ["extra"]}} =
+             Lifecycle.validate_result(Map.put(pm_plan, "reconciliation", Map.put(base_reconciliation, "extra", true)))
+
+    assert {:error, {:missing_reconciliation_fields, ["assessment"]}} =
+             Lifecycle.validate_result(Map.put(pm_plan, "reconciliation", Map.delete(base_reconciliation, "assessment")))
+
+    assert {:error, :invalid_reconciliation} = Lifecycle.validate_result(Map.put(pm_plan, "reconciliation", "bad"))
+
+    assert {:error, {:reconciliation_not_allowed_for_role, :reviewer}} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "reconciliation", base_reconciliation))
+
+    await_pm = Map.put(valid_result("PM", "await_human"), "human_question", "Supply authorization.")
+
+    basis = %{
+      "required_external_action" => "Authorize the external fixture.",
+      "existing_authority_gap" => "Current authority cannot provide it.",
+      "supporting_transition_ids" => []
+    }
+
+    assert {:error, {:unknown_escalation_basis_fields, ["extra"]}} =
+             Lifecycle.validate_result(Map.put(await_pm, "escalation_basis", Map.put(basis, "extra", true)))
+
+    assert {:error, {:missing_escalation_basis_fields, ["existing_authority_gap"]}} =
+             Lifecycle.validate_result(Map.put(await_pm, "escalation_basis", Map.delete(basis, "existing_authority_gap")))
+
+    assert {:error, :invalid_escalation_basis} = Lifecycle.validate_result(Map.put(await_pm, "escalation_basis", "bad"))
+
+    assert {:error, :unexpected_escalation_basis} =
+             Lifecycle.validate_result(Map.put(pm_plan, "escalation_basis", basis))
+
+    assert {:error, {:escalation_basis_not_allowed_for_role, :reviewer}} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "escalation_basis", basis))
+
+    resolved = prerequisite_report("resolved")
+
+    assert {:error, {:prerequisite_resolution_not_allowed_for_role, :implementer}} =
+             Lifecycle.validate_result(Map.put(valid_result("IMPLEMENTER", "implementation_complete"), "prerequisite_resolution", resolved))
+
+    assert {:error, :invalid_prerequisite_resolution} =
+             Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", "bad"))
+
+    assert {:error, :invalid_prerequisite_alternatives} =
+             Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", Map.put(resolved, "alternatives", [])))
+
+    assert {:error, {:unknown_prerequisite_alternative_fields, ["extra"]}} =
+             Lifecycle.validate_result(
+               Map.put(
+                 valid_result("PLANNER", "plan_ready"),
+                 "prerequisite_resolution",
+                 Map.put(resolved, "alternatives", [Map.put(List.first(resolved["alternatives"]), "extra", true)])
+               )
+             )
+
+    assert {:error, :invalid_prerequisite_alternative} =
+             Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", Map.put(resolved, "alternatives", [:bad])))
+
+    invalid_approach = Map.put(List.first(resolved["alternatives"]), "approach", 12)
+
+    assert {:error, {:invalid_prerequisite_field, :alternative_approach}} =
+             Lifecycle.validate_result(
+               Map.put(resolved, "alternatives", [invalid_approach])
+               |> then(&Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", &1))
+             )
+
+    invalid_evidence = Map.put(List.first(resolved["alternatives"]), "evidence", :bad)
+
+    assert {:error, {:invalid_prerequisite_list, :alternative_evidence}} =
+             Lifecycle.validate_result(
+               Map.put(resolved, "alternatives", [invalid_evidence])
+               |> then(&Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", &1))
+             )
+
+    inconsistent = Map.put(resolved, "authority_status", "requires_external_action")
+
+    assert {:error, :inconsistent_prerequisite_resolution} =
+             Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", inconsistent))
+
+    assert Lifecycle.prerequisite_resolution_complete?(prerequisite_report("no_feasible_authorized_path_established"))
+    assert Lifecycle.prerequisite_progress(%{}, %{}) == :not_applicable
+    assert Lifecycle.prerequisite_context(:not_a_state) == %{}
+    assert Lifecycle.lifecycle_context(:not_a_state) == %{}
+    assert Lifecycle.lifecycle_context(%{current_role: :pm})[:predecessor] == nil
+    assert Lifecycle.lifecycle_context(%{current_role: :unknown}) == %{}
+
+    assert {:error, {:invalid_reconciliation_list, :considered_transition_ids}} =
+             Lifecycle.validate_result(Map.put(pm_plan, "reconciliation", Map.put(base_reconciliation, "considered_transition_ids", :bad)))
+  end
+
+  test "lifecycle context retains correction, predecessor, and fallback descriptions" do
+    report = prerequisite_report("unresolved")
+
+    correction = %{
+      "round" => 1,
+      "planning_attempt" => 1,
+      "role" => "REVIEWER",
+      "from_role" => "REVIEWER",
+      "outcome" => "revise",
+      "prerequisite_resolution" => report,
+      "summary" => "The prerequisite remains unresolved.",
+      "evidence" => ["review evidence"]
+    }
+
+    attempted = %{
+      "round" => 1,
+      "planning_attempt" => 2,
+      "role" => "PLANNER",
+      "from_role" => "PLANNER",
+      "outcome" => "plan_ready",
+      "prerequisite_resolution" => report,
+      "summary" => "The plan remains bounded.",
+      "evidence" => ["planner evidence"]
+    }
+
+    context =
+      Lifecycle.lifecycle_context(%{
+        current_role: :planner,
+        round: 1,
+        planning_attempt: 2,
+        pm_phase: nil,
+        events: [correction]
+      })
+
+    assert context.lifecycle_position == "planning_correction"
+    assert context.object_received == "Reviewer correction request"
+    assert context.already_happened == ["Reviewer produced a correction request for this planning attempt."]
+    assert context.temporal_interpretation =~ "corrected proposed plan"
+    assert context.prerequisite_context.attempted_resolution == nil
+
+    attempted_context =
+      Lifecycle.prerequisite_context(%{
+        current_role: :planner,
+        round: 1,
+        planning_attempt: 2,
+        events: [correction, attempted]
+      })
+
+    assert attempted_context.attempted_resolution.prerequisite_resolution == report
+
+    assert Lifecycle.prerequisite_context(%{
+             current_role: :planner,
+             round: 1,
+             planning_attempt: 2,
+             events: [correction, Map.delete(attempted, "prerequisite_resolution")]
+           }).attempted_resolution == nil
+
+    assert Lifecycle.prerequisite_progress(
+             %{events: [%{"round" => 1, "planning_attempt" => 2, "role" => "OTHER"}], round: 1, planning_attempt: 0},
+             Map.put(valid_result("REVIEWER", "revise"), "prerequisite_resolution", report)
+           ) == :material
+
+    assert Lifecycle.prerequisite_progress(
+             %{events: [%{"round" => 1, "planning_attempt" => 2, "role" => "OTHER"}], round: 1, planning_attempt: 3},
+             Map.put(valid_result("REVIEWER", "revise"), "prerequisite_resolution", report)
+           ) == :material
+
+    assert Lifecycle.lifecycle_context(%{current_role: :pm, events: [%{"from_role" => "PLANNER"}]})
+           |> Map.take([:already_happened, :not_yet_happened]) == %{already_happened: [], not_yet_happened: []}
+  end
+
   test "prerequisite resolution is structured and controls specialist dispositions" do
     resolved = prerequisite_report("resolved")
     unresolved = prerequisite_report("unresolved")
@@ -581,6 +748,18 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert {:ok, _} =
              Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", resolved))
+
+    assert {:ok, %{to_role: :reviewer}} =
+             Lifecycle.transition_for_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", resolved))
+
+    assert {:error, {:unknown_prerequisite_resolution_fields, ["extra"]}} =
+             Lifecycle.validate_result(
+               Map.put(
+                 valid_result("PLANNER", "plan_ready"),
+                 "prerequisite_resolution",
+                 Map.put(resolved, "extra", true)
+               )
+             )
 
     assert {:error, :plan_ready_has_unresolved_prerequisite} =
              Lifecycle.transition_for_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", unresolved))
