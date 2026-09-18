@@ -12,6 +12,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     Config,
     GitHub.Client,
     Lifecycle,
+    LifecycleEvidence,
     LifecycleHistory,
     RoleProfiles,
     RoleRouter
@@ -50,6 +51,19 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  @doc false
+  @spec correctable_role_result_error?(term()) :: boolean()
+  def correctable_role_result_error?(reason) do
+    reason in [
+      :missing_returning_pm_reconciliation,
+      :returning_pm_missing_completed_round_evidence,
+      :missing_returning_pm_escalation_evidence,
+      :missing_pm_escalation_basis
+    ] or
+      match?({:invalid_reconciliation_reference, _}, reason) or
+      match?({:invalid_escalation_reference, _}, reason)
+  end
+
   @spec block_pm_continuity(Issue.t(), term(), keyword()) :: {:ok, Issue.t()} | {:error, term()}
   def block_pm_continuity(%Issue{id: issue_id}, reason, _opts \\ [])
       when is_binary(issue_id) do
@@ -68,6 +82,26 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       else
         {:ok, role} -> {:error, {:pm_continuity_requires_pm_role, role}}
         {:error, _reason} = error -> error
+      end
+    else
+      {:error, :lifecycle_requires_github_tracker}
+    end
+  end
+
+  @spec block_role_result_contract(Issue.t(), term(), keyword()) :: {:ok, Issue.t()} | {:error, term()}
+  def block_role_result_contract(%Issue{id: issue_id}, reason, _opts \\ [])
+      when is_binary(issue_id) do
+    if github_tracker?() do
+      with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
+           :ok <- validate_active_issue(current_issue),
+           :ok <- validate_opt_in(current_issue) do
+        case block_invalid_state(current_issue, nil, {:role_result_contract_exhausted, reason}) do
+          {:skip, _blocked} ->
+            {:ok, current_issue}
+
+          {:error, _reason} = error ->
+            error
+        end
       end
     else
       {:error, :lifecycle_requires_github_tracker}
@@ -103,6 +137,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
   defp commit_with_history(current_issue, history, expected_role, result) do
     with {:ok, validated_result} <- validate_expected_result(result, expected_role),
+         :ok <- validate_evidence_reconciliation(history, validated_result),
          idempotent <- idempotent_result(history, current_issue, validated_result, expected_role) do
       case idempotent do
         {:ok, _commit} = ok ->
@@ -163,6 +198,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
         Map.get(event, key) == Map.get(result, key)
       end) and
       Map.get(event, "human_question") == Map.get(result, "human_question") and
+      Map.get(event, "reconciliation") == Map.get(result, "reconciliation") and
+      Map.get(event, "escalation_basis") == Map.get(result, "escalation_basis") and
       (event["kind"] != "terminal" or
          event["terminal_reason"] in expected_terminal_reasons(result))
   end
@@ -193,13 +230,15 @@ defmodule SymphonyElixir.LifecycleCoordinator do
          result: %{
            "schema" => event["role_result_schema"],
            "role" => event["role"],
-           "outcome" => outcome,
-           "summary" => event["summary"],
-           "evidence" => event["evidence"],
-           "findings" => event["findings"],
-           "human_question" => event["human_question"],
-           "prerequisite_resolution" => Map.get(event, "prerequisite_resolution")
-         }
+            "outcome" => outcome,
+            "summary" => event["summary"],
+            "evidence" => event["evidence"],
+            "findings" => event["findings"],
+            "human_question" => event["human_question"],
+            "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
+            "reconciliation" => Map.get(event, "reconciliation"),
+            "escalation_basis" => Map.get(event, "escalation_basis")
+          }
        }}
     end
   end
@@ -229,6 +268,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       completed_working_round?: history.completed_working_round?,
       preceding_adversary_findings: history.preceding_adversary_findings,
       prerequisite_context: Lifecycle.prerequisite_context(history),
+      reconciliation: LifecycleEvidence.project(history),
       accepted_events: handoff_events
     }
   end
@@ -453,6 +493,91 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp validate_evidence_reconciliation(history, %{"role" => "PM"} = result) do
+    with :ok <- validate_pm_escalation_basis(result) do
+      case LifecycleEvidence.project(history) do
+        nil ->
+          validate_initial_pm_references(result)
+
+        %{accepted_events: accepted_events, required_transition_ids: required_ids} = projection ->
+          with :ok <- validate_completed_round_evidence(projection),
+               :ok <- validate_exact_reconciliation_ids(result["reconciliation"], required_ids),
+               :ok <- validate_escalation_evidence(result, accepted_events) do
+            :ok
+          end
+      end
+    end
+  end
+
+  defp validate_evidence_reconciliation(_history, _result), do: :ok
+
+  defp validate_pm_escalation_basis(%{"outcome" => "await_human", "escalation_basis" => basis})
+       when is_map(basis),
+       do: :ok
+
+  defp validate_pm_escalation_basis(%{"outcome" => "await_human"}),
+    do: {:error, :missing_pm_escalation_basis}
+
+  defp validate_pm_escalation_basis(_result), do: :ok
+
+  defp validate_initial_pm_references(result) do
+    reconciliation_ids = get_in(result, ["reconciliation", "considered_transition_ids"])
+    supporting_ids = get_in(result, ["escalation_basis", "supporting_transition_ids"])
+
+    cond do
+      is_list(reconciliation_ids) and reconciliation_ids != [] ->
+        {:error, {:invalid_reconciliation_reference, reconciliation_ids}}
+
+      is_list(supporting_ids) and supporting_ids != [] ->
+        {:error, {:invalid_escalation_reference, supporting_ids}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_completed_round_evidence(%{accepted_events: events}) do
+    roles = Enum.map(events, & &1["role"])
+
+    if "IMPLEMENTER" in roles and "ADVERSARY" in roles,
+      do: :ok,
+      else: {:error, :returning_pm_missing_completed_round_evidence}
+  end
+
+  defp validate_exact_reconciliation_ids(%{"considered_transition_ids" => ids}, required_ids)
+       when is_list(ids) do
+    if ids == required_ids do
+      :ok
+    else
+      {:error, {:invalid_reconciliation_reference, %{expected: required_ids, received: ids}}}
+    end
+  end
+
+  defp validate_exact_reconciliation_ids(_reconciliation, _required_ids),
+    do: {:error, :missing_returning_pm_reconciliation}
+
+  defp validate_escalation_evidence(%{"outcome" => "await_human", "escalation_basis" => basis}, events)
+       when is_map(basis) do
+    relevant_ids = MapSet.new(Enum.map(events, & &1["transition_id"]))
+    supporting_ids = basis["supporting_transition_ids"]
+
+    cond do
+      supporting_ids == [] ->
+        {:error, :missing_returning_pm_escalation_evidence}
+
+      not Enum.all?(supporting_ids, &MapSet.member?(relevant_ids, &1)) ->
+        {:error, {:invalid_escalation_reference, supporting_ids}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_escalation_evidence(%{"outcome" => "await_human"}, _events),
+    do: {:error, :missing_returning_pm_escalation_evidence}
+
+  defp validate_escalation_evidence(_result, _events), do: :ok
+
   defp transition_position(history, %{"role" => role_name, "outcome" => outcome}) do
     with {:ok, role} <- canonical_role(role_name) do
       case {role, outcome, history.pm_phase} do
@@ -565,6 +690,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     Map.merge(payload, %{
       "human_question" => Map.get(result, "human_question"),
       "prerequisite_resolution" => Map.get(result, "prerequisite_resolution"),
+      "reconciliation" => Map.get(result, "reconciliation"),
+      "escalation_basis" => Map.get(result, "escalation_basis"),
       "terminal_reason" => Map.get(transition, :terminal_reason)
     })
   end

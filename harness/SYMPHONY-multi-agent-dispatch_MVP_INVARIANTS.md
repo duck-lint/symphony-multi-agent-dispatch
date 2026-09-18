@@ -102,6 +102,8 @@ evidence
 findings
 human_question
 terminal_reason
+reconciliation (returning PM only)
+escalation_basis (PM await_human only)
 ```
 
 For MVP, transition identity is deterministic from lifecycle position:
@@ -177,6 +179,19 @@ MVP finding severity is only `blocking` or `advisory`.
 
 `human_question` must be non-null only when `outcome` is `await_human`; otherwise it must be null.
 
+Returning PM results must include a `reconciliation` object with exactly `considered_transition_ids` and
+`assessment`. The host projection supplies accepted current-round specialist events in ledger order; the PM must
+cite every projected event without duplicates, fabricated IDs, omissions, or unrelated references. The host preserves
+the original reports and validates provenance, but does not determine whether the PM's assessment is semantically
+correct.
+
+Every PM `await_human` result must include an `escalation_basis` object with exactly
+`required_external_action`, `existing_authority_gap`, and `supporting_transition_ids`. An initial PM may use an
+empty supporting-ID list because no specialist evidence exists. A returning PM must cite one or more accepted
+current-round specialist events. The host validates shape and reference integrity; the PM distinguishes an
+implementation defect, failed reproduction, execution-environment failure, unresolved evidence question, and a
+genuinely external prerequisite.
+
 PLANNER and REVIEWER may include a `prerequisite_resolution` object when a prerequisite blocks feasibility.
 It records the blocked objective, missing prerequisite, absence evidence, authoritative requirement, material
 alternatives with evidence and dispositions (`available`, `observed_unavailable`, `demonstrated_infeasible`,
@@ -224,6 +239,13 @@ A Reviewer `accept` result may not contain blocking findings. A returning PM `co
 Blocking findings from the immediately preceding Adversary result structurally forbid `PM → ARCHIVIST`. They can only be cleared for convergence purposes by another complete working round whose Adversary result contains no blocking findings.
 
 The host validates role, schema, outcome, budget, convergence preconditions, and expected current GitHub state before changing lifecycle state.
+
+History-dependent reconciliation and escalation checks run against the authoritative ledger fetched at commit time
+and before idempotency or persistence. A correctable PM contract error returns to the same PM thread with an
+actionable diagnostic for a bounded correction opportunity; it does not append an event, consume a lifecycle budget,
+or create another specialist round. Repeated PM contract failure reaches a visible bounded block rather than an
+unbounded retry loop. Persistence, history-integrity, label, and projection failures retain separate blocking
+behavior.
 
 When a prerequisite correction is active, a fresh Planner must return a structured resolution report. A
 `plan_ready` result with an unresolved report is invalid. A specific external prerequisite may use

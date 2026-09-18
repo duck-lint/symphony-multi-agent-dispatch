@@ -71,7 +71,9 @@ or issue closure; the successful lifecycle leaves the GitHub issue open.
 
 Every role must return one strict `symphony.role-result/v1` JSON object and no surrounding prose. Required
 top-level keys are `schema`, `role`, `outcome`, `summary`, `evidence`, and `findings`; `human_question` and
-`prerequisite_resolution` are optional, with the latter limited to PLANNER and REVIEWER. Roles are exactly
+`prerequisite_resolution` are optional, with the latter limited to PLANNER and REVIEWER. PM returning results also
+carry `reconciliation` (`considered_transition_ids`, `assessment`), and PM `await_human` results carry
+`escalation_basis` (`required_external_action`, `existing_authority_gap`, `supporting_transition_ids`). Roles are exactly
 `PM`, `PLANNER`, `REVIEWER`, `IMPLEMENTER`, `ADVERSARY`, or `ARCHIVIST`, with these legal outcomes:
 
 ```text
@@ -100,6 +102,14 @@ enforce field shape, report/outcome consistency, transition legality, terminal i
 repetition. It cannot establish that an agent examined every possible mechanism or that two arbitrary prose plans
 are semantically equivalent. Synthetic tests cover these host guarantees; they do not prove exhaustive live agent
 investigation.
+
+For a returning PM, the host builds a pure reconciliation projection from accepted current-round specialist event
+maps. It preserves transition IDs, role, outcome, evidence, findings, and prerequisite reports without replacing
+the reports with a generated summary. The commit-time validator requires the PM to cite every projected event in
+ledger order and requires returning PM escalations to cite a nonempty subset of those accepted IDs. Missing or
+invalid references are correctable role-result errors: the same PM thread receives the precise host diagnostic for
+at most three corrections, after which the lifecycle is visibly blocked without committing the rejected result.
+Old lifecycle events remain readable when these additive PM fields are absent.
 
 ## Runtime configuration and provenance
 

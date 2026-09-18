@@ -115,6 +115,172 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert first_planner_context == second_planner_context
   end
 
+  test "reconciles Normalize issue #5 evidence without substituting either report" do
+    lifecycle_id = "normalize-5"
+    events = issue_five_round_events(lifecycle_id)
+    install_returning_pm_history(events)
+
+    assert {:ok, %{handoff: handoff}} = LifecycleCoordinator.prepare_dispatch(github_issue())
+    reconciliation = handoff.reconciliation
+
+    assert Enum.map(reconciliation.accepted_events, & &1["role"]) == [
+             "PLANNER",
+             "REVIEWER",
+             "IMPLEMENTER",
+             "ADVERSARY"
+           ]
+
+    assert Enum.find(reconciliation.accepted_events, &(&1["role"] == "IMPLEMENTER"))["evidence"] == [
+             "TMPDIR=/tmp .venv/bin/pytest -q -s reportedly yielded 12 passed",
+             "clean-wheel verification reportedly succeeded"
+           ]
+
+    assert Enum.find(reconciliation.accepted_events, &(&1["role"] == "ADVERSARY"))["evidence"] == [
+             "separate pytest invocation yielded six passed",
+             "six temporary-directory setup errors occurred before affected assertions"
+           ]
+
+    adversary_only =
+      role_result("PM", "plan", "The reports require another authorized working round.")
+      |> Map.put("reconciliation", %{
+        "considered_transition_ids" => [
+          LifecycleHistory.transition_id(lifecycle_id, 1, 1, :adversary, "review_complete")
+        ],
+        "assessment" => "The independent run did not reproduce complete acceptance."
+      })
+
+    assert {:error, {:invalid_reconciliation_reference, _}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, adversary_only)
+
+    valid = Map.put(adversary_only, "reconciliation", reconciliation_payload(reconciliation))
+
+    assert {:ok, %{event: event, idempotent?: false}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, valid)
+
+    assert event["reconciliation"] == valid["reconciliation"]
+    assert event["to_role"] == "PLANNER"
+
+    assert {:ok, %{history: restarted_history}} = LifecycleCoordinator.prepare_dispatch(github_issue())
+    assert List.last(restarted_history.events)["reconciliation"] == valid["reconciliation"]
+
+    assert {:ok, %{idempotent?: true}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, valid)
+
+    invalid_replay = Map.delete(valid, "reconciliation")
+
+    assert {:error, :missing_returning_pm_reconciliation} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, invalid_replay)
+  end
+
+  test "returning PM cannot omit, duplicate, fabricate, or use prior-round evidence" do
+    lifecycle_id = "normalize-5-references"
+    install_returning_pm_history(issue_five_round_events(lifecycle_id))
+
+    assert {:ok, %{handoff: %{reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    ids = projection.required_transition_ids
+    implementer_id = LifecycleHistory.transition_id(lifecycle_id, 1, 1, :implementer, "implementation_complete")
+    adversary_id = LifecycleHistory.transition_id(lifecycle_id, 1, 1, :adversary, "review_complete")
+    valid_base = role_result("PM", "plan", "Another authorized working round is required.")
+
+    for bad_ids <- [
+          List.delete(ids, implementer_id),
+          List.delete(ids, adversary_id),
+          ids ++ [List.first(ids)],
+          List.replace_at(ids, 0, "other-life:r1:p1:IMPLEMENTER:implementation_complete"),
+          List.replace_at(ids, 0, LifecycleHistory.transition_id(lifecycle_id, 0, 0, :pm, "plan"))
+        ] do
+      result = Map.put(valid_base, "reconciliation", %{
+        "considered_transition_ids" => bad_ids,
+        "assessment" => "The current reports were considered."
+      })
+
+      assert {:error, _reason} =
+               LifecycleCoordinator.commit_role_result(github_issue(), :pm, result)
+    end
+  end
+
+  test "returning PM escalation requires external basis and accepted evidence" do
+    lifecycle_id = "normalize-5-escalation"
+    events = issue_five_round_events(lifecycle_id)
+    install_returning_pm_history(events)
+
+    # The real projection is taken from current authoritative comments, not this
+    # local value; this assertion also guards that the helper is not a second ledger.
+    assert {:ok, %{handoff: %{reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    result =
+      role_result("PM", "await_human", "An external authorization is required.")
+      |> Map.put("reconciliation", reconciliation_payload(projection))
+      |> Map.put("human_question", "Authorize access to the required external fixture.")
+      |> Map.put("escalation_basis", %{
+        "required_external_action" => "Authorize access to the required external fixture.",
+        "existing_authority_gap" => "The current read-only project authority cannot supply it.",
+        "supporting_transition_ids" => [
+          LifecycleHistory.transition_id(lifecycle_id, 1, 1, :implementer, "implementation_complete"),
+          LifecycleHistory.transition_id(lifecycle_id, 1, 1, :adversary, "review_complete")
+        ]
+      })
+
+    assert {:ok, %{event: event}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, result)
+
+    assert event["kind"] == "escalation"
+    assert event["escalation_basis"] == result["escalation_basis"]
+  end
+
+  test "initial PM await_human without escalation basis is rejected without a transition" do
+    assert {:ok, _} = LifecycleCoordinator.prepare_dispatch(github_issue())
+    result = role_result("PM", "await_human", "A decision is required.")
+    result = Map.put(result, "human_question", "What decision should be made?")
+
+    assert {:error, :missing_pm_escalation_basis} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, result)
+
+    state = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+    assert length(state.comments) == 1
+  end
+
+  test "valid reconciliation preserves convergence routing and blocking findings still reject it" do
+    lifecycle_id = "normalize-5-convergence"
+    events = issue_five_round_events(lifecycle_id)
+    install_returning_pm_history(events)
+
+    assert {:ok, %{handoff: %{reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    converging_result =
+      role_result("PM", "converge", "The objective is satisfied after reconciling both reports.")
+      |> Map.put("reconciliation", reconciliation_payload(projection))
+
+    assert {:ok, %{event: event}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, converging_result)
+
+    assert event["to_role"] == "ARCHIVIST"
+
+    blocking_events =
+      issue_five_round_events("normalize-5-blocked")
+      |> List.update_at(5, &Map.put(&1, "findings", [
+        %{
+          "severity" => "blocking",
+          "summary" => "The adversarial result blocks convergence.",
+          "evidence" => ["The blocking condition remains unresolved."]
+        }
+      ]))
+
+    install_returning_pm_history(blocking_events)
+
+    assert {:ok, %{handoff: %{reconciliation: blocked_projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    blocked_result = Map.put(converging_result, "reconciliation", reconciliation_payload(blocked_projection))
+
+    assert {:error, :blocking_adversary_findings} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :pm, blocked_result)
+  end
+
   test "a complete prerequisite investigation can produce a visible non-converged terminal" do
     lifecycle_id = "life-prerequisite"
 
@@ -276,6 +442,46 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       "evidence" => ["host test evidence"],
       "findings" => []
     }
+  end
+
+  defp install_returning_pm_history(events) do
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{
+        state
+        | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:pm", "human-label"]},
+          comments: Enum.map(events, &%{"body" => LifecycleHistory.render(&1)})
+      }
+    end)
+  end
+
+  defp reconciliation_payload(%{required_transition_ids: ids}), do: %{
+    "considered_transition_ids" => ids,
+    "assessment" => "The reports are both retained with distinct provenance; the independent run did not establish an application assertion failure."
+  }
+
+  defp issue_five_round_events(lifecycle_id) do
+    [
+      LifecycleHistory.start_event(lifecycle_id),
+      transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1),
+      transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1),
+      transition_event(lifecycle_id, "REVIEWER", "accept", "IMPLEMENTER", 1, 1),
+      transition_event(lifecycle_id, "IMPLEMENTER", "implementation_complete", "ADVERSARY", 1, 1)
+      |> Map.merge(%{
+        "summary" => "Reported implementation verification completed.",
+        "evidence" => [
+          "TMPDIR=/tmp .venv/bin/pytest -q -s reportedly yielded 12 passed",
+          "clean-wheel verification reportedly succeeded"
+        ]
+      }),
+      transition_event(lifecycle_id, "ADVERSARY", "review_complete", "PM", 1, 1)
+      |> Map.merge(%{
+        "summary" => "Independent reproduction was incomplete because setup failed.",
+        "evidence" => [
+          "separate pytest invocation yielded six passed",
+          "six temporary-directory setup errors occurred before affected assertions"
+        ]
+      })
+    ]
   end
 
   defp prerequisite_report do

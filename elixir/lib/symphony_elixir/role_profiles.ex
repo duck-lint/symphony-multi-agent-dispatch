@@ -404,10 +404,10 @@ defmodule SymphonyElixir.RoleProfiles do
     allowed_outcomes = role |> allowed_outcomes() |> Enum.join(" | ")
     role_name = role_name(role)
 
-    """
+    contract = """
     Return exactly one JSON object and no Markdown or surrounding prose. It must contain these
-    required top-level keys and no other keys unless the human_question or prerequisite_resolution
-    rules below permit it: "schema", "role", "outcome", "summary", "evidence", and "findings".
+    required top-level keys and no other keys unless the human_question, prerequisite_resolution,
+    reconciliation, or escalation_basis rules below permit it: "schema", "role", "outcome", "summary", "evidence", and "findings".
     "schema" must be exactly "symphony.role-result/v1". "role" must be exactly "#{role_name}"
     (one of PM, PLANNER, REVIEWER, IMPLEMENTER, ADVERSARY, or ARCHIVIST). For this #{role_name}
     role, "outcome" must be exactly one of: #{allowed_outcomes}. Do not invent synonyms such as "handoff" or "done".
@@ -429,5 +429,26 @@ defmodule SymphonyElixir.RoleProfiles do
     Include "human_question" only when outcome is "await_human", and then it must be a non-empty
     JSON string. For every other outcome, omit "human_question" or set it to JSON null.
     """
+
+    if role == :pm do
+      contract <> """
+      PM reconciliation contract:
+      - When the host-derived lifecycle context says the PM is returning after a completed working
+        round, include a "reconciliation" object with exactly "considered_transition_ids" and
+        "assessment". The IDs must be copied from the host-supplied reconciliation projection in
+        its displayed order; do not invent, duplicate, omit, or replace an ID. "assessment" is your
+        interpretation of the reports and their evidentiary limits, not host proof of semantic correctness.
+      - When the PM is initial, "reconciliation" may be omitted or null because no specialist evidence
+        exists yet.
+      - Whenever outcome is "await_human", include an "escalation_basis" object with exactly
+        "required_external_action", "existing_authority_gap", and "supporting_transition_ids".
+        The first two values must state the precise external action and why current authority cannot
+        supply it. Initial PM may use an empty supporting ID array; returning PM must cite accepted
+        evidence from the current working round. The host checks provenance and shape, not whether
+        your interpretation is correct.
+      """
+    else
+      contract
+    end
   end
 end

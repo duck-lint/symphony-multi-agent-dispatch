@@ -15,6 +15,7 @@ defmodule SymphonyElixir.PromptBuilder do
     handoff = Map.get(context, :handoff)
     runtime_authority = Map.get(context, :runtime_authority)
     lifecycle_context = Map.get(context, :lifecycle_context)
+    correction_feedback = Map.get(context, :correction_feedback)
 
     runtime_authority_section =
       case runtime_authority do
@@ -28,6 +29,18 @@ defmodule SymphonyElixir.PromptBuilder do
         context -> "\nHost-derived lifecycle context:\n#{format_context(context)}\n"
       end
 
+    reconciliation_section =
+      case handoff && Map.get(handoff, :reconciliation) do
+        nil -> ""
+        reconciliation -> "\nHost-projected evidence reconciliation (accepted event data; not a semantic verdict):\n#{format_context(reconciliation)}\n"
+      end
+
+    correction_feedback_section =
+      case correction_feedback do
+        nil -> ""
+        feedback -> "\nHost correction diagnostic (the prior result was not committed; correct the result contract only):\n#{format_context(feedback)}\n"
+      end
+
     """
     You are executing the SYMPHONY role #{profile.name}.
 
@@ -36,6 +49,8 @@ defmodule SymphonyElixir.PromptBuilder do
 
     #{runtime_authority_section}
     #{lifecycle_context_section}
+    #{reconciliation_section}
+    #{correction_feedback_section}
     #{RoleProfiles.result_contract_instructions(profile.role)}
 
     Host-supplied handoff/context:

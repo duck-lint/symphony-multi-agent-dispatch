@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.Tracker.Issue
 
   @failure_retry_base_ms 10_000
+  @max_pm_contract_corrections 3
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @empty_codex_totals %{
@@ -272,17 +273,21 @@ defmodule SymphonyElixir.Orchestrator do
         release_issue_claim(state, issue_id)
 
       {:error, reason} ->
-        Logger.warning(
-          "Unable to commit SYMPHONY lifecycle transition for issue_id=#{issue_id}; " <>
-            "retaining validated role result for host retry: #{inspect(reason)}"
-        )
+        if role == :pm and LifecycleCoordinator.correctable_role_result_error?(reason) do
+          retry_pm_contract_correction(state, issue_id, running_entry, session_id, reason)
+        else
+          Logger.warning(
+            "Unable to commit SYMPHONY lifecycle transition for issue_id=#{issue_id}; " <>
+              "retaining validated role result for host retry: #{inspect(reason)}"
+          )
 
-        block_issue_from_entry(
-          state,
-          issue_id,
-          running_entry,
-          "lifecycle transition commit failed: #{inspect(reason)}"
-        )
+          block_issue_from_entry(
+            state,
+            issue_id,
+            running_entry,
+            "lifecycle transition commit failed: #{inspect(reason)}"
+          )
+        end
     end
   end
 
@@ -360,7 +365,9 @@ defmodule SymphonyElixir.Orchestrator do
       issue_url: running_entry.issue.url,
       error: "agent exited: #{inspect(reason)}",
       worker_host: Map.get(running_entry, :worker_host),
-      workspace_path: Map.get(running_entry, :workspace_path)
+      workspace_path: Map.get(running_entry, :workspace_path),
+      correction_feedback: Map.get(running_entry, :correction_feedback),
+      correction_attempt: Map.get(running_entry, :correction_attempt, 0)
     })
   end
 
@@ -370,15 +377,56 @@ defmodule SymphonyElixir.Orchestrator do
         "rerunning the same lifecycle role: #{inspect(reason)}"
     )
 
-    next_attempt = next_retry_attempt_from_running(running_entry)
+    if role == :pm do
+      retry_pm_contract_correction(state, issue_id, running_entry, session_id, reason)
+    else
+      next_attempt = next_retry_attempt_from_running(running_entry)
 
-    schedule_issue_retry(state, issue_id, next_attempt, %{
-      identifier: running_entry.identifier,
-      issue_url: running_entry.issue.url,
-      error: "role result contract rejected: #{inspect(reason)}",
-      worker_host: Map.get(running_entry, :worker_host),
-      workspace_path: Map.get(running_entry, :workspace_path)
-    })
+      schedule_issue_retry(state, issue_id, next_attempt, %{
+        identifier: running_entry.identifier,
+        issue_url: running_entry.issue.url,
+        error: "role result contract rejected: #{inspect(reason)}",
+        worker_host: Map.get(running_entry, :worker_host),
+        workspace_path: Map.get(running_entry, :workspace_path)
+      })
+    end
+  end
+
+  defp retry_pm_contract_correction(state, issue_id, running_entry, session_id, reason) do
+    correction_attempt = Map.get(running_entry, :correction_attempt, 0)
+
+    if correction_attempt >= @max_pm_contract_corrections do
+      diagnostic =
+        "PM result remained outside the host evidence contract after #{@max_pm_contract_corrections} corrections " <>
+          "for issue_id=#{issue_id}: #{inspect(reason)}"
+
+      Logger.error("#{diagnostic} session_id=#{session_id}")
+
+      case LifecycleCoordinator.block_role_result_contract(running_entry.issue, reason) do
+        {:ok, _issue} ->
+          block_issue_from_entry(state, issue_id, Map.put(running_entry, :role_execution, nil), diagnostic)
+
+        {:error, block_reason} ->
+          block_issue_from_entry(
+            state,
+            issue_id,
+            Map.put(running_entry, :role_execution, nil),
+            "#{diagnostic}; #{inspect(block_reason)}"
+          )
+      end
+    else
+      next_attempt = next_retry_attempt_from_running(running_entry)
+
+      schedule_issue_retry(state, issue_id, next_attempt, %{
+        identifier: running_entry.identifier,
+        issue_url: running_entry.issue.url,
+        error: "PM result contract correction required: #{inspect(reason)}",
+        correction_feedback: inspect(reason),
+        correction_attempt: correction_attempt + 1,
+        worker_host: Map.get(running_entry, :worker_host),
+        workspace_path: Map.get(running_entry, :workspace_path)
+      })
+    end
   end
 
   defp maybe_dispatch(%State{} = state) do
@@ -792,7 +840,9 @@ defmodule SymphonyElixir.Orchestrator do
         |> schedule_issue_retry(issue_id, next_attempt, %{
           identifier: identifier,
           issue_url: running_entry.issue.url,
-          error: "stalled for #{elapsed_ms}ms without codex activity"
+          error: "stalled for #{elapsed_ms}ms without codex activity",
+          correction_feedback: Map.get(running_entry, :correction_feedback),
+          correction_attempt: Map.get(running_entry, :correction_attempt, 0)
         })
       end
     else
@@ -1083,10 +1133,24 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
-  defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
+  defp dispatch_issue(
+         %State{} = state,
+         issue,
+         attempt \\ nil,
+         preferred_worker_host \\ nil,
+         correction_feedback \\ nil,
+         correction_attempt \\ 0
+       ) do
     case refresh_issue_for_dispatch(issue) do
       {:ok, %Issue{} = refreshed_issue} ->
-        do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
+        do_dispatch_issue(
+          state,
+          refreshed_issue,
+          attempt,
+          preferred_worker_host,
+          correction_feedback,
+          correction_attempt
+        )
 
       {:skip, _reason} ->
         state
@@ -1116,7 +1180,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
+  defp do_dispatch_issue(
+         %State{} = state,
+         issue,
+         attempt,
+         preferred_worker_host,
+         correction_feedback,
+         correction_attempt
+       ) do
     case LifecycleCoordinator.prepare_dispatch(issue) do
       {:skip, reason} ->
         Logger.info("Skipping dispatch for #{issue_context(issue)}: #{inspect(reason)}")
@@ -1133,7 +1204,9 @@ defmodule SymphonyElixir.Orchestrator do
           handoff,
           lifecycle_context,
           attempt,
-          preferred_worker_host
+          preferred_worker_host,
+          correction_feedback,
+          correction_attempt
         )
     end
   end
@@ -1144,7 +1217,9 @@ defmodule SymphonyElixir.Orchestrator do
          handoff,
          lifecycle_context,
          attempt,
-         preferred_worker_host
+         preferred_worker_host,
+         correction_feedback,
+         correction_attempt
        ) do
     case role_profile_for_dispatch(issue) do
       {:error, reason} ->
@@ -1174,7 +1249,9 @@ defmodule SymphonyElixir.Orchestrator do
               role_profile.role,
               role_profile,
               handoff,
-              lifecycle_context
+              lifecycle_context,
+              correction_feedback,
+              correction_attempt
             )
         end
     end
@@ -1189,7 +1266,9 @@ defmodule SymphonyElixir.Orchestrator do
          role,
          role_profile,
          handoff,
-         lifecycle_context
+         lifecycle_context,
+         correction_feedback,
+         correction_attempt
        ) do
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
            AgentRunner.run(
@@ -1199,9 +1278,10 @@ defmodule SymphonyElixir.Orchestrator do
              worker_host: worker_host,
              role: role,
              role_profile: role_profile,
-             handoff: handoff,
-             lifecycle_context: lifecycle_context,
-             lifecycle_id: Map.get(handoff, :lifecycle_id),
+              handoff: handoff,
+              lifecycle_context: lifecycle_context,
+              correction_feedback: correction_feedback,
+              lifecycle_id: Map.get(handoff, :lifecycle_id),
              pm_phase: Map.get(handoff, :pm_phase)
            )
          end) do
@@ -1233,6 +1313,8 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
+            correction_attempt: correction_attempt,
+            correction_feedback: correction_feedback,
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now()
           })
@@ -1252,7 +1334,9 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: issue.identifier,
           issue_url: issue.url,
           error: "failed to spawn agent: #{inspect(reason)}",
-          worker_host: worker_host
+          worker_host: worker_host,
+          correction_feedback: correction_feedback,
+          correction_attempt: correction_attempt
         })
     end
   end
@@ -1313,7 +1397,9 @@ defmodule SymphonyElixir.Orchestrator do
             issue_url: issue_url,
             error: error,
             worker_host: worker_host,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            correction_feedback: Map.get(metadata, :correction_feedback),
+            correction_attempt: Map.get(metadata, :correction_attempt, 0)
           })
     }
   end
@@ -1326,7 +1412,9 @@ defmodule SymphonyElixir.Orchestrator do
           issue_url: Map.get(retry_entry, :issue_url),
           error: Map.get(retry_entry, :error),
           worker_host: Map.get(retry_entry, :worker_host),
-          workspace_path: Map.get(retry_entry, :workspace_path)
+          workspace_path: Map.get(retry_entry, :workspace_path),
+          correction_feedback: Map.get(retry_entry, :correction_feedback),
+          correction_attempt: Map.get(retry_entry, :correction_attempt, 0)
         }
 
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
@@ -1430,7 +1518,15 @@ defmodule SymphonyElixir.Orchestrator do
          worker_slots_available?(state, metadata[:worker_host]) do
       case refresh_issue_for_dispatch(issue) do
         {:ok, %Issue{} = refreshed_issue} ->
-          {:noreply, do_dispatch_issue(state, refreshed_issue, attempt, metadata[:worker_host])}
+          {:noreply,
+           do_dispatch_issue(
+             state,
+             refreshed_issue,
+             attempt,
+             metadata[:worker_host],
+             metadata[:correction_feedback],
+             metadata[:correction_attempt] || 0
+           )}
 
         {:skip, :missing} ->
           {:noreply, release_issue_claim(state, issue.id)}

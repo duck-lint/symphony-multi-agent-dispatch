@@ -11,8 +11,21 @@ defmodule SymphonyElixir.Lifecycle do
 
   @schema "symphony.role-result/v1"
   @required_result_keys ~w(schema role outcome summary evidence findings)
-  @allowed_result_keys ~w(schema role outcome summary evidence findings human_question prerequisite_resolution)
+  @allowed_result_keys ~w(
+    schema
+    role
+    outcome
+    summary
+    evidence
+    findings
+    human_question
+    prerequisite_resolution
+    reconciliation
+    escalation_basis
+  )
   @finding_keys ~w(severity summary evidence)
+  @reconciliation_keys ~w(considered_transition_ids assessment)
+  @escalation_basis_keys ~w(required_external_action existing_authority_gap supporting_transition_ids)
   @prerequisite_resolution_keys ~w(
     blocked_objective
     missing_prerequisite
@@ -39,9 +52,11 @@ defmodule SymphonyElixir.Lifecycle do
          {:ok, outcome} <- validate_result_outcome(role, Map.get(result, "outcome")),
          :ok <- validate_summary(Map.get(result, "summary")),
          :ok <- validate_evidence(Map.get(result, "evidence")),
-         :ok <- validate_findings(Map.get(result, "findings")),
-         :ok <- validate_prerequisite_resolution(role, Map.get(result, "prerequisite_resolution")),
-         :ok <- validate_human_question(outcome, Map.get(result, "human_question")) do
+          :ok <- validate_findings(Map.get(result, "findings")),
+          :ok <- validate_prerequisite_resolution(role, Map.get(result, "prerequisite_resolution")),
+          :ok <- validate_human_question(outcome, Map.get(result, "human_question")),
+          :ok <- validate_reconciliation(role, Map.get(result, "reconciliation")),
+          :ok <- validate_escalation_basis(role, outcome, Map.get(result, "escalation_basis")) do
       {:ok, result}
     end
   end
@@ -607,6 +622,59 @@ defmodule SymphonyElixir.Lifecycle do
   defp validate_human_question(_outcome, nil), do: :ok
   defp validate_human_question(_outcome, _question), do: {:error, :unexpected_human_question}
 
+  defp validate_reconciliation(_role, nil), do: :ok
+
+  defp validate_reconciliation(:pm, reconciliation) when is_map(reconciliation) do
+    unknown = Map.keys(reconciliation) -- @reconciliation_keys
+    missing = @reconciliation_keys -- Map.keys(reconciliation)
+
+    cond do
+      unknown != [] -> {:error, {:unknown_reconciliation_fields, unknown}}
+      missing != [] -> {:error, {:missing_reconciliation_fields, missing}}
+      true ->
+        with :ok <- validate_unique_string_list(reconciliation["considered_transition_ids"], :considered_transition_ids),
+             :ok <- validate_non_empty_string(reconciliation["assessment"], :assessment) do
+          :ok
+        end
+    end
+  end
+
+  defp validate_reconciliation(:pm, _reconciliation), do: {:error, :invalid_reconciliation}
+
+  defp validate_reconciliation(role, _reconciliation),
+    do: {:error, {:reconciliation_not_allowed_for_role, role}}
+
+  defp validate_escalation_basis(:pm, "await_human", basis) when is_map(basis) do
+    unknown = Map.keys(basis) -- @escalation_basis_keys
+    missing = @escalation_basis_keys -- Map.keys(basis)
+
+    cond do
+      unknown != [] -> {:error, {:unknown_escalation_basis_fields, unknown}}
+      missing != [] -> {:error, {:missing_escalation_basis_fields, missing}}
+      true ->
+        with :ok <- validate_non_empty_string(basis["required_external_action"], :required_external_action),
+             :ok <- validate_non_empty_string(basis["existing_authority_gap"], :existing_authority_gap),
+             :ok <- validate_unique_string_list(basis["supporting_transition_ids"], :supporting_transition_ids) do
+          :ok
+        end
+    end
+  end
+
+  defp validate_escalation_basis(:pm, "await_human", nil), do: :ok
+
+  defp validate_escalation_basis(:pm, "await_human", _basis),
+    do: {:error, :invalid_escalation_basis}
+
+  defp validate_escalation_basis(:pm, _outcome, nil), do: :ok
+
+  defp validate_escalation_basis(:pm, _outcome, _basis),
+    do: {:error, :unexpected_escalation_basis}
+
+  defp validate_escalation_basis(_role, _outcome, nil), do: :ok
+
+  defp validate_escalation_basis(role, _outcome, _basis),
+    do: {:error, {:escalation_basis_not_allowed_for_role, role}}
+
   defp validate_prerequisite_resolution(_role, nil), do: :ok
 
   defp validate_prerequisite_resolution(role, report) when role not in [:planner, :reviewer] and is_map(report),
@@ -691,6 +759,22 @@ defmodule SymphonyElixir.Lifecycle do
   end
 
   defp validate_string_list_field(_value, field), do: {:error, {:invalid_prerequisite_list, field}}
+
+  defp validate_unique_string_list(value, field) when is_list(value) do
+    cond do
+      not Enum.all?(value, &(is_binary(&1) and String.trim(&1) != "")) ->
+        {:error, {:invalid_reconciliation_list, field}}
+
+      length(Enum.uniq(value)) != length(value) ->
+        {:error, {:duplicate_reconciliation_reference, field}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_unique_string_list(_value, field),
+    do: {:error, {:invalid_reconciliation_list, field}}
 
   defp validate_enum(value, allowed, field) do
     if value in allowed, do: :ok, else: {:error, {:invalid_prerequisite_enum, field, value}}

@@ -233,10 +233,12 @@ defmodule SymphonyElixir.LifecycleHistory do
         "outcome" => event["outcome"],
         "summary" => event["summary"],
         "evidence" => event["evidence"],
-        "findings" => event["findings"],
-        "human_question" => event["human_question"],
-        "prerequisite_resolution" => Map.get(event, "prerequisite_resolution")
-      }
+         "findings" => event["findings"],
+         "human_question" => event["human_question"],
+         "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
+         "reconciliation" => Map.get(event, "reconciliation"),
+         "escalation_basis" => Map.get(event, "escalation_basis")
+       }
 
       case Lifecycle.validate_result(result) do
         {:ok, _validated} -> validate_terminal_reason(event["terminal_reason"])

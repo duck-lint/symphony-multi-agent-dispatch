@@ -122,6 +122,17 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert prompt =~ "round: 2"
     assert prompt =~ "findings: [:advisory]"
 
+    returning_pm_prompt =
+      PromptBuilder.build_prompt(issue, :pm, %{
+        handoff: %{reconciliation: %{required_transition_ids: ["life:r1:p1:ADVERSARY:review_complete"]}},
+        correction_feedback: ":invalid_reconciliation_reference"
+      })
+
+    assert returning_pm_prompt =~ "Host-projected evidence reconciliation"
+    assert returning_pm_prompt =~ "life:r1:p1:ADVERSARY:review_complete"
+    assert returning_pm_prompt =~ "Host correction diagnostic"
+    assert returning_pm_prompt =~ "PM reconciliation contract"
+
     {:ok, reviewer_policy} = RoleRuntimePolicy.for_role(:reviewer, "/tmp/issue-workspace")
 
     prompt_with_authority =
@@ -461,6 +472,44 @@ defmodule SymphonyElixir.RoleKernelTest do
     Process.cancel_timer(timer_ref)
   end
 
+  test "repeated PM contract failure reaches a bounded block without retaining the rejected result" do
+    issue = %Issue{id: "issue-pm-contract", identifier: "MT-PM-CONTRACT", url: "https://example.test/issue-pm-contract"}
+    ref = make_ref()
+
+    running_entry = %{
+      ref: ref,
+      pid: self(),
+      identifier: issue.identifier,
+      issue: issue,
+      role: :pm,
+      correction_attempt: 3,
+      retry_attempt: 0,
+      worker_host: nil,
+      workspace_path: nil,
+      session_id: "session-pm-contract",
+      started_at: DateTime.utc_now()
+    }
+
+    state = %Orchestrator.State{
+      running: %{issue.id => running_entry},
+      claimed: MapSet.new([issue.id]),
+      retry_attempts: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    {:noreply, state} =
+      Orchestrator.handle_info(
+        {:role_execution_failed, issue.id, %{kind: :role_result_contract, role: :pm, reason: :missing_pm_escalation_basis}},
+        state
+      )
+
+    {:noreply, state} = Orchestrator.handle_info({:DOWN, ref, :process, self(), :normal}, state)
+
+    assert state.running == %{}
+    assert state.retry_attempts == %{}
+    assert state.blocked[issue.id].role_execution == nil
+  end
+
   test "finding severity, human question, and transition result validation are bounded" do
     base = valid_result("REVIEWER", "accept")
 
@@ -485,6 +534,35 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert {:error, :unexpected_human_question} =
              Lifecycle.validate_result(Map.put(base, "human_question", "not allowed"))
+
+    reconciliation = %{
+      "considered_transition_ids" => ["life:r1:p1:IMPLEMENTER:implementation_complete"],
+      "assessment" => "The accepted report was considered with its evidentiary limits."
+    }
+
+    assert {:ok, _} = Lifecycle.validate_result(Map.put(valid_result("PM", "plan"), "reconciliation", reconciliation))
+
+    assert {:error, {:duplicate_reconciliation_reference, :considered_transition_ids}} =
+             Lifecycle.validate_result(
+               Map.put(
+                 valid_result("PM", "plan"),
+                 "reconciliation",
+                 %{reconciliation | "considered_transition_ids" => ["same", "same"]}
+               )
+             )
+
+    escalation_basis = %{
+      "required_external_action" => "Authorize the external fixture.",
+      "existing_authority_gap" => "Current authority cannot provide it.",
+      "supporting_transition_ids" => []
+    }
+
+    assert {:ok, _} =
+             Lifecycle.validate_result(
+               valid_result("PM", "await_human")
+               |> Map.put("human_question", "Authorize the external fixture.")
+               |> Map.put("escalation_basis", escalation_basis)
+             )
 
     transition_result = Map.put(valid_result("PLANNER", "plan_ready"), "human_question", nil)
 
