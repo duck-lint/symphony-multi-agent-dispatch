@@ -46,7 +46,12 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp format_context(nil), do: "No additional handoff was supplied."
   defp format_context(context) when is_binary(context), do: context
-  defp format_context(context), do: inspect(context, pretty: true)
+
+  # Structured lifecycle evidence must remain complete at the prompt boundary.
+  # Jason is also the repository's durable lifecycle-ledger encoding, so this
+  # keeps prompt evidence in the same explicit, machine-readable representation
+  # without changing which events or fields the coordinator selected.
+  defp format_context(context), do: Jason.encode!(context, pretty: true)
 
   defp handoff_reconciliation(%{reconciliation: reconciliation}), do: reconciliation
   defp handoff_reconciliation(_handoff), do: nil
