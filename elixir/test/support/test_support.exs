@@ -8,6 +8,7 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.CLI
       alias SymphonyElixir.Codex.AppServer
       alias SymphonyElixir.Config
+      alias SymphonyElixir.EnvironmentCapabilities
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.InstanceConfig
       alias SymphonyElixir.InstanceConfigStore
@@ -75,6 +76,16 @@ defmodule SymphonyElixir.TestSupport do
   def restore_env(key, value), do: System.put_env(key, value)
 
   def stop_default_http_server do
+    case Process.whereis(SymphonyElixir.Supervisor) do
+      nil ->
+        :ok
+
+      _supervisor ->
+        stop_default_http_server_child()
+    end
+  end
+
+  defp stop_default_http_server_child do
     case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
            {SymphonyElixir.HttpServer, _pid, _type, _modules} -> true
            _child -> false
@@ -107,6 +118,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
+          environment_capabilities: [],
           worker_ssh_hosts: [],
           worker_max_concurrent_agents_per_host: nil,
           max_concurrent_agents: 10,
@@ -143,6 +155,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
+    environment_capabilities = Keyword.get(config, :environment_capabilities)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
@@ -181,6 +194,8 @@ defmodule SymphonyElixir.TestSupport do
         "  interval_ms: #{yaml_value(poll_interval_ms)}",
         "workspace:",
         "  root: #{yaml_value(workspace_root)}",
+        "environment:",
+        "  capabilities: #{yaml_value(environment_capabilities)}",
         worker_yaml(worker_ssh_hosts, worker_max_concurrent_agents_per_host),
         "agent:",
         "  max_concurrent_agents: #{yaml_value(max_concurrent_agents)}",

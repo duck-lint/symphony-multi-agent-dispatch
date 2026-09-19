@@ -55,6 +55,39 @@ temporal/structural position, and handoff supplies task-specific prior evidence.
 derived from the reconstructed visible ledger for prompt orientation; it is not a second durable record
 or a routing authority.
 
+## Host-verified environment capabilities
+
+An instance may declare project capabilities under `environment.capabilities`. Each capability has a stable
+`id`, an optional workspace-relative `resources` list, an optional workspace-relative `working_directory`
+(default `.`), and an optional direct `command` with an `executable` and argv-style `args`. Relative
+executable paths are resolved from the workspace root; bare executable names use the host PATH. A capability
+must declare at least one resource or command. Paths cannot be absolute or escape the workspace.
+
+```yaml
+environment:
+  capabilities:
+    - id: project-runtime
+      command:
+        executable: .venv/bin/python
+        args: ["-c", "import project_package"]
+      resources:
+        - fixtures/input/example.pdf
+```
+
+After the existing `before_run` hook succeeds, the host verifies every declared capability in the current
+workspace and creates an ephemeral `symphony.environment-capabilities/v1` report for that dispatch. Resource
+checks and direct commands are executed by the host; arbitrary `before_run` shell text is not parsed into
+capability evidence. Any missing resource, unavailable executable, non-zero command, timeout, or unsafe
+declaration fails closed through the existing preparation-failure/retry path. A project with no declarations
+receives a `not_checked` report and no fabricated capability claims.
+
+The report reaches PM and every fresh specialist through the shared structured prompt context. It contains
+the resolved workspace identity, a digest of the relevant declaration, verification time, capability IDs,
+safe canonical executable/resource information, and observed status. Command output and argv contents are not
+copied into prompts; command arguments are represented by a digest. `verified` means that the declared checks
+passed at the report's verification time. It is evidence, not permission, and it is not a permanent guarantee
+that the workspace cannot change. Role sandbox policies and project write boundaries remain independent.
+
 ## Authority and result contract
 
 Role authority is structural:

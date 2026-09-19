@@ -273,6 +273,87 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  @doc false
+  @spec workspace_resource_available?(String.t(), String.t(), worker_host()) ::
+          :ok | {:error, term()}
+  def workspace_resource_available?(workspace, relative_path, nil)
+      when is_binary(workspace) and is_binary(relative_path) do
+    with {:ok, path} <- local_workspace_path(workspace, relative_path, false) do
+      if File.exists?(path), do: :ok, else: {:error, :unavailable}
+    end
+  end
+
+  def workspace_resource_available?(workspace, relative_path, worker_host)
+      when is_binary(workspace) and is_binary(relative_path) and is_binary(worker_host) do
+    path = Path.join(workspace, relative_path)
+
+    case run_remote_command(worker_host, "test -e -- #{shell_escape(path)}", Config.settings!().hooks.timeout_ms) do
+      {:ok, {_output, 0}} -> :ok
+      {:ok, {_output, _status}} -> {:error, :unavailable}
+      {:error, {:workspace_hook_timeout, _hook_name, timeout_ms}} -> {:error, {:timeout, timeout_ms}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc false
+  @spec run_verification_command(String.t(), String.t(), map(), worker_host()) ::
+          :ok | {:error, term()}
+  def run_verification_command(workspace, working_directory, command, nil)
+      when is_binary(workspace) and is_binary(working_directory) and is_map(command) do
+    executable = Map.fetch!(command, "executable")
+    args = Map.get(command, "args", [])
+
+    with {:ok, directory} <- local_workspace_path(workspace, working_directory, true),
+         {:ok, executable} <- local_command_executable(workspace, executable) do
+      task =
+        Task.async(fn ->
+          try do
+            {:ok, System.cmd(executable, args, cd: directory, stderr_to_stdout: true)}
+          rescue
+            _error -> {:error, :unavailable}
+          end
+        end)
+
+      case Task.yield(task, Config.settings!().hooks.timeout_ms) do
+        {:ok, {:ok, {_output, 0}}} ->
+          :ok
+
+        {:ok, {:ok, {_output, status}}} ->
+          {:error, {:failed, status}}
+
+        {:ok, {:error, reason}} ->
+          {:error, reason}
+
+        {:exit, _reason} ->
+          {:error, :unavailable}
+
+        nil ->
+          Task.shutdown(task, :brutal_kill)
+          {:error, {:timeout, Config.settings!().hooks.timeout_ms}}
+      end
+    end
+  end
+
+  def run_verification_command(workspace, working_directory, command, worker_host)
+      when is_binary(workspace) and is_binary(working_directory) and is_map(command) and
+             is_binary(worker_host) do
+    executable = Map.fetch!(command, "executable")
+    args = Map.get(command, "args", [])
+
+    command_line =
+      [remote_command_executable(workspace, executable) | args]
+      |> Enum.map_join(" ", &shell_escape/1)
+
+    script = "cd #{shell_escape(Path.join(workspace, working_directory))} && #{command_line}"
+
+    case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
+      {:ok, {_output, 0}} -> :ok
+      {:ok, {_output, status}} -> {:error, {:failed, status}}
+      {:error, {:workspace_hook_timeout, _hook_name, timeout_ms}} -> {:error, {:timeout, timeout_ms}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @spec run_after_run_hook(Path.t(), map() | String.t() | nil, worker_host()) :: :ok
   def run_after_run_hook(workspace, issue_or_identifier, worker_host \\ nil) when is_binary(workspace) do
     issue_context = issue_context(issue_or_identifier)
@@ -296,6 +377,49 @@ defmodule SymphonyElixir.Workspace do
 
   defp workspace_path_for_issue(safe_id, worker_host) when is_binary(safe_id) and is_binary(worker_host) do
     {:ok, Path.join(Config.settings!().workspace.root, safe_id)}
+  end
+
+  defp local_workspace_path(workspace, relative_path, allow_current_directory?) do
+    if safe_workspace_relative_path?(relative_path, allow_current_directory?) do
+      with {:ok, canonical_workspace} <- PathSafety.canonicalize(workspace),
+           {:ok, canonical_path} <- PathSafety.canonicalize(Path.join(canonical_workspace, relative_path)),
+           true <- path_within_workspace?(canonical_path, canonical_workspace) do
+        {:ok, canonical_path}
+      else
+        false -> {:error, :unsafe_path}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :unsafe_path}
+    end
+  end
+
+  defp local_command_executable(workspace, executable) do
+    if String.contains?(executable, "/") do
+      local_workspace_path(workspace, executable, false)
+    else
+      {:ok, executable}
+    end
+  end
+
+  defp remote_command_executable(workspace, executable) do
+    if String.contains?(executable, "/") do
+      Path.join(workspace, executable)
+    else
+      executable
+    end
+  end
+
+  defp safe_workspace_relative_path?(path, allow_current_directory?) do
+    path != "" and (allow_current_directory? or path != ".") and
+      not String.contains?(path, <<0>>) and
+      not String.contains?(path, "\\") and
+      Path.type(path) != :absolute and
+      not Enum.any?(String.split(path, "/"), &(&1 in ["", ".."]))
+  end
+
+  defp path_within_workspace?(path, workspace) do
+    path == workspace or String.starts_with?(path, workspace <> "/")
   end
 
   @doc """
