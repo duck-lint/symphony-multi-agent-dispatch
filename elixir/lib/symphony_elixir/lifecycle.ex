@@ -672,9 +672,8 @@ defmodule SymphonyElixir.Lifecycle do
 
       true ->
         with :ok <- validate_revision_string(reconciliation["rejected_planner_transition_id"], :rejected_planner_transition_id),
-             :ok <- validate_revision_string(reconciliation["reviewer_transition_id"], :reviewer_transition_id),
-             :ok <- validate_revision_finding_responses(outcome, reconciliation["finding_responses"]) do
-          :ok
+             :ok <- validate_revision_string(reconciliation["reviewer_transition_id"], :reviewer_transition_id) do
+          validate_revision_finding_responses(outcome, reconciliation["finding_responses"])
         end
     end
   end
@@ -710,9 +709,8 @@ defmodule SymphonyElixir.Lifecycle do
 
       true ->
         with :ok <- validate_revision_string(response["finding_ref"], :finding_ref),
-             :ok <- validate_revision_string(response["assessment"], :assessment),
-             :ok <- validate_revision_plan_excerpt(outcome, response["plan_excerpt"]) do
-          :ok
+             :ok <- validate_revision_string(response["assessment"], :assessment) do
+          validate_revision_plan_excerpt(outcome, response["plan_excerpt"])
         end
     end
   end

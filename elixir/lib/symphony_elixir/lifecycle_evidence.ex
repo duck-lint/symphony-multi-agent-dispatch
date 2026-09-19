@@ -67,28 +67,34 @@ defmodule SymphonyElixir.LifecycleEvidence do
       when is_binary(lifecycle_id) and is_integer(round) and is_integer(planning_attempt) and
              is_list(events) do
     if planning_attempt > 0 do
-      triggering_attempt = planning_attempt - 1
-
-      case Enum.reverse(events) do
-        [reviewer, planner | _older_events] ->
-          if revision_pair?(lifecycle_id, round, triggering_attempt, planner, reviewer) do
-            %{
-              lifecycle_id: lifecycle_id,
-              round: round,
-              planning_attempt: triggering_attempt,
-              rejected_planner: event_projection(planner),
-              reviewer: event_projection(reviewer),
-              reviewer_findings: finding_projection(reviewer)
-            }
-          end
-
-        _ ->
-          nil
-      end
+      revision_projection_for_attempt(lifecycle_id, round, planning_attempt - 1, events)
     end
   end
 
   def revision_projection(_history), do: nil
+
+  defp revision_projection_for_attempt(lifecycle_id, round, planning_attempt, events) do
+    case Enum.reverse(events) do
+      [reviewer, planner | _older_events] ->
+        revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer) do
+    if revision_pair?(lifecycle_id, round, planning_attempt, planner, reviewer) do
+      %{
+        lifecycle_id: lifecycle_id,
+        round: round,
+        planning_attempt: planning_attempt,
+        rejected_planner: event_projection(planner),
+        reviewer: event_projection(reviewer),
+        reviewer_findings: finding_projection(reviewer)
+      }
+    end
+  end
 
   defp revision_pair?(lifecycle_id, round, planning_attempt, planner, reviewer) do
     event_identity?(planner, lifecycle_id, round, planning_attempt, "PLANNER", "plan_ready", "REVIEWER") and

@@ -54,11 +54,22 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   @doc false
   @spec correctable_role_result_error?(term()) :: boolean()
   def correctable_role_result_error?(reason) do
+    pm_contract_error?(reason) or planner_contract_error?(reason)
+  end
+
+  defp pm_contract_error?(reason) do
     reason in [
       :missing_returning_pm_reconciliation,
       :returning_pm_missing_completed_round_evidence,
       :missing_returning_pm_escalation_evidence,
-      :missing_pm_escalation_basis,
+      :missing_pm_escalation_basis
+    ] or
+      match?({:invalid_reconciliation_reference, _}, reason) or
+      match?({:invalid_escalation_reference, _}, reason)
+  end
+
+  defp planner_contract_error?(reason) do
+    reason in [
       :missing_returning_planner_revision_reconciliation,
       :unexpected_planner_revision_reconciliation,
       :invalid_revision_reconciliation,
@@ -67,8 +78,6 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       :invalid_revision_plan_excerpt,
       :unexpected_revision_plan_excerpt
     ] or
-      match?({:invalid_reconciliation_reference, _}, reason) or
-      match?({:invalid_escalation_reference, _}, reason) or
       match?({:invalid_planner_revision_reconciliation, _}, reason) or
       match?({:invalid_revision_finding_references, _}, reason) or
       match?({:unknown_revision_reconciliation_fields, _}, reason) or
@@ -583,9 +592,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     with :ok <- validate_revision_reconciliation_present(reconciliation),
          :ok <- validate_revision_transition_ids(reconciliation, projection),
          :ok <- validate_revision_finding_refs(reconciliation, expected_finding_refs),
-         :ok <- validate_revision_finding_assessments(reconciliation["finding_responses"]),
-         :ok <- validate_revision_plan_excerpts(result, reconciliation["finding_responses"]) do
-      :ok
+         :ok <- validate_revision_finding_assessments(reconciliation["finding_responses"]) do
+      validate_revision_plan_excerpts(result, reconciliation["finding_responses"])
     end
   end
 
