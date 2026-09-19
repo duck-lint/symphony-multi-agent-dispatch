@@ -270,24 +270,16 @@ defmodule SymphonyElixir.RoleKernelTest do
              Lifecycle.validate_result(Map.put(base, "revision_reconciliation", []))
 
     assert {:error, {:unknown_revision_reconciliation_fields, _}} =
-             Lifecycle.validate_result(
-               Map.put(base, "revision_reconciliation", Map.put(reconciliation, "extra", true))
-             )
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", Map.put(reconciliation, "extra", true)))
 
     assert {:error, {:missing_revision_reconciliation_fields, _}} =
-             Lifecycle.validate_result(
-               Map.put(base, "revision_reconciliation", Map.delete(reconciliation, "reviewer_transition_id"))
-             )
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", Map.delete(reconciliation, "reviewer_transition_id")))
 
     assert {:error, :invalid_revision_finding_responses} =
-             Lifecycle.validate_result(
-               Map.put(base, "revision_reconciliation", Map.put(reconciliation, "finding_responses", %{}))
-             )
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", Map.put(reconciliation, "finding_responses", %{})))
 
     assert {:error, :invalid_revision_finding_response} =
-             Lifecycle.validate_result(
-               Map.put(base, "revision_reconciliation", Map.put(reconciliation, "finding_responses", [nil]))
-             )
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", Map.put(reconciliation, "finding_responses", [nil])))
 
     malformed_response =
       put_in(reconciliation, ["finding_responses", Access.at(0)], %{

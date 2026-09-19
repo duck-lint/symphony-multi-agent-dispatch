@@ -119,6 +119,7 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
     lifecycle_id = "life-empty-review"
     planner = revision_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)
     reviewer = revision_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, 1)
+
     history = %{
       active?: true,
       current_role: :planner,
