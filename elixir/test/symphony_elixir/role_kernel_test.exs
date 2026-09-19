@@ -275,6 +275,16 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert {:error, {:missing_revision_reconciliation_fields, _}} =
              Lifecycle.validate_result(Map.put(base, "revision_reconciliation", Map.delete(reconciliation, "reviewer_transition_id")))
 
+    malformed_ids = Map.put(reconciliation, "rejected_planner_transition_id", "")
+
+    assert {:error, {:invalid_revision_reconciliation, {:empty_field, :rejected_planner_transition_id}}} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", malformed_ids))
+
+    malformed_ids = Map.put(reconciliation, "reviewer_transition_id", 123)
+
+    assert {:error, {:invalid_revision_reconciliation, {:invalid_field, :reviewer_transition_id}}} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", malformed_ids))
+
     assert {:error, :invalid_revision_finding_responses} =
              Lifecycle.validate_result(Map.put(base, "revision_reconciliation", Map.put(reconciliation, "finding_responses", %{})))
 
@@ -334,6 +344,13 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert {:error, {:unexpected_revision_plan_excerpt, "await_human"}} =
              Lifecycle.validate_result(await_human)
+
+    non_converged =
+      valid_result("PLANNER", "non_converged")
+      |> Map.put("revision_reconciliation", reconciliation)
+
+    assert {:error, {:unexpected_revision_plan_excerpt, "non_converged"}} =
+             Lifecycle.validate_result(non_converged)
   end
 
   test "lifecycle context describes the generic role metamap without changing routing" do
