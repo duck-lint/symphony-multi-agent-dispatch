@@ -726,9 +726,6 @@ defmodule SymphonyElixir.Lifecycle do
   defp validate_revision_plan_excerpt(outcome, _excerpt) when outcome in ["await_human", "non_converged"],
     do: {:error, {:unexpected_revision_plan_excerpt, outcome}}
 
-  defp validate_revision_plan_excerpt(_outcome, _excerpt),
-    do: {:error, :invalid_revision_plan_excerpt}
-
   defp validate_revision_string(value, field) when is_binary(value) do
     if String.trim(value) == "" do
       {:error, {:invalid_revision_reconciliation, {:empty_field, field}}}
