@@ -1311,6 +1311,131 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "No description provided."
   end
 
+  test "structured lifecycle handoffs reach every role without inspection abbreviations" do
+    issue = %Issue{
+      identifier: "GH-8",
+      title: "Preserve the complete lifecycle handoff",
+      description: "The selected lifecycle evidence must reach the next role.",
+      state: "In Progress",
+      url: "https://example.org/issues/GH-8",
+      labels: []
+    }
+
+    lifecycle_id = "3bLP9a-KKimOeer5JE9Rng"
+
+    current_plan =
+      "Corrective plan: retain the accepted evidence, update the bounded serializer, and verify the exact prompt at the Codex boundary."
+
+    handoff = %{
+      lifecycle_id: lifecycle_id,
+      current_role: :reviewer,
+      round: 2,
+      planning_attempt: 2,
+      pm_phase: :initial,
+      completed_working_round?: false,
+      preceding_adversary_findings: [],
+      prerequisite_context: %{required?: false, outstanding_evidence_frontier: []},
+      reconciliation: nil,
+      revision_reconciliation: nil,
+      accepted_events: [
+        %{
+          "lifecycle_id" => lifecycle_id,
+          "transition_id" => "#{lifecycle_id}:r2:p1:PLANNER:plan_ready",
+          "role" => "PLANNER",
+          "from_role" => "PLANNER",
+          "outcome" => "plan_ready",
+          "to_role" => "REVIEWER",
+          "round" => 2,
+          "planning_attempt" => 1,
+          "summary" => "Initial plan with substantial verification detail.",
+          "evidence" => ["Earlier planning evidence remains historical."],
+          "findings" => []
+        },
+        %{
+          "lifecycle_id" => lifecycle_id,
+          "transition_id" => "#{lifecycle_id}:r2:p1:REVIEWER:revise",
+          "role" => "REVIEWER",
+          "from_role" => "REVIEWER",
+          "outcome" => "revise",
+          "to_role" => "PLANNER",
+          "round" => 2,
+          "planning_attempt" => 1,
+          "summary" => "The first plan requires a corrective planning attempt.",
+          "evidence" => ["Reviewer evidence identifies the missing delivery proof."],
+          "findings" => [
+            %{
+              "severity" => "blocking",
+              "summary" => "The exact current plan must be delivered to the Reviewer.",
+              "evidence" => [
+                "The prior prompt contained an abbreviated nested event map.",
+                "The transition identity and corrective plan were not visible."
+              ]
+            },
+            %{
+              "severity" => "advisory",
+              "summary" => "The prompt must retain historical and current evidence distinctly.",
+              "evidence" => [
+                "The current handoff follows an earlier plan and a revision request.",
+                "The next role needs both provenance and complete nested findings."
+              ]
+            }
+          ]
+        },
+        %{
+          "lifecycle_id" => lifecycle_id,
+          "transition_id" => "#{lifecycle_id}:r2:p2:PLANNER:plan_ready",
+          "role" => "PLANNER",
+          "from_role" => "PLANNER",
+          "outcome" => "plan_ready",
+          "to_role" => "REVIEWER",
+          "round" => 2,
+          "planning_attempt" => 2,
+          "summary" => current_plan,
+          "evidence" => [
+            "Verification instructions: compare the rendered prompt with the selected event map.",
+            "Verification instructions: assert the Codex turn input contains the same complete JSON."
+          ],
+          "findings" => [],
+          "revision_reconciliation" => %{
+            "rejected_planner_transition_id" => "#{lifecycle_id}:r2:p1:PLANNER:plan_ready",
+            "reviewer_transition_id" => "#{lifecycle_id}:r2:p1:REVIEWER:revise",
+            "finding_responses" => [
+              %{
+                "finding_ref" => "#{lifecycle_id}:r2:p1:REVIEWER:revise:finding:0",
+                "assessment" => "The serializer change preserves the complete selected plan.",
+                "plan_excerpt" => "update the bounded serializer"
+              },
+              %{
+                "finding_ref" => "#{lifecycle_id}:r2:p1:REVIEWER:revise:finding:1",
+                "assessment" => "The prompt keeps historical events before the current handoff.",
+                "plan_excerpt" => "retain the accepted evidence"
+              }
+            ]
+          }
+        }
+      ]
+    }
+
+    expected_handoff = Jason.encode!(handoff, pretty: true)
+
+    for role <- [:pm, :planner, :reviewer, :implementer, :adversary, :archivist] do
+      prompt =
+        PromptBuilder.build_prompt(issue, role, %{
+          handoff: handoff,
+          lifecycle_context: %{current_role: "REVIEWER", predecessor: "PLANNER", round: 2},
+          runtime_authority: %{role: role, project_write: role == :implementer}
+        })
+
+      assert prompt =~ expected_handoff
+      assert prompt =~ "#{lifecycle_id}:r2:p2:PLANNER:plan_ready"
+      assert prompt =~ current_plan
+      assert prompt =~ "Verification instructions: compare the rendered prompt with the selected event map."
+      assert prompt =~ "#{lifecycle_id}:r2:p1:REVIEWER:revise:finding:0"
+      refute prompt =~ "%{...}"
+      refute prompt =~ "[...]"
+    end
+  end
+
   test "prompt builder requires and honors explicit role identity" do
     issue = %Issue{
       identifier: "MT-780",
@@ -1775,7 +1900,31 @@ defmodule SymphonyElixir.CoreTest do
         labels: ["symphony:role:planner"]
       }
 
-      assert :ok = AgentRunner.run(issue, nil, role: :planner)
+      handoff = %{
+        lifecycle_id: "life-codex-boundary",
+        current_role: :planner,
+        round: 2,
+        planning_attempt: 2,
+        accepted_events: [
+          %{
+            "transition_id" => "life-codex-boundary:r2:p2:PLANNER:plan_ready",
+            "role" => "PLANNER",
+            "summary" => "Complete corrective plan delivered to the next role.",
+            "evidence" => ["Run the independent verification command after dispatch."],
+            "findings" => [
+              %{
+                "severity" => "blocking",
+                "summary" => "Preserve the complete nested finding.",
+                "evidence" => ["The previous serializer abbreviated this event."]
+              }
+            ]
+          }
+        ]
+      }
+
+      expected_handoff = Jason.encode!(handoff, pretty: true)
+
+      assert :ok = AgentRunner.run(issue, nil, role: :planner, handoff: handoff)
 
       lines = File.read!(trace_file) |> String.split("\n", trim: true)
 
@@ -1795,6 +1944,9 @@ defmodule SymphonyElixir.CoreTest do
 
       assert length(turn_texts) == 1
       assert Enum.at(turn_texts, 0) =~ "You are executing the SYMPHONY role PLANNER."
+      assert Enum.at(turn_texts, 0) =~ expected_handoff
+      refute Enum.at(turn_texts, 0) =~ "%{...}"
+      refute Enum.at(turn_texts, 0) =~ "[...]"
       refute Enum.at(turn_texts, 0) =~ "Continuation guidance:"
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")

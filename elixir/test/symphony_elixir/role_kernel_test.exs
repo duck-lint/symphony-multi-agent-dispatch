@@ -120,8 +120,9 @@ defmodule SymphonyElixir.RoleKernelTest do
     prompt =
       PromptBuilder.build_prompt(issue, :pm, %{handoff: %{round: 2, findings: [:advisory]}})
 
-    assert prompt =~ "round: 2"
-    assert prompt =~ "findings: [:advisory]"
+    assert prompt =~ "\"round\": 2"
+    assert prompt =~ "\"findings\": ["
+    assert prompt =~ "\"advisory\""
 
     returning_pm_prompt =
       PromptBuilder.build_prompt(issue, :pm, %{
@@ -161,10 +162,10 @@ defmodule SymphonyElixir.RoleKernelTest do
       })
 
     assert prompt_with_authority =~ "Host-enforced runtime authority:"
-    assert prompt_with_authority =~ "write_authority: :read_only"
-    assert prompt_with_authority =~ "sandbox_mode: \"readOnly\""
-    assert prompt_with_authority =~ "network_enabled: false"
-    assert prompt_with_authority =~ "model_tracker_tools: :disabled"
+    assert prompt_with_authority =~ "\"write_authority\": \"read_only\""
+    assert prompt_with_authority =~ "\"sandbox_mode\": \"readOnly\""
+    assert prompt_with_authority =~ "\"network_enabled\": false"
+    assert prompt_with_authority =~ "\"model_tracker_tools\": \"disabled\""
 
     implementer_prompt = PromptBuilder.build_prompt(issue, :implementer)
     assert implementer_prompt =~ "validate the result against live runtime"
@@ -211,9 +212,9 @@ defmodule SymphonyElixir.RoleKernelTest do
     prompt = PromptBuilder.build_prompt(issue, :reviewer, %{lifecycle_context: context})
 
     assert prompt =~ "Host-derived lifecycle context:"
-    assert prompt =~ "current_role: \"REVIEWER\""
-    assert prompt =~ "object_received: \"Planner's proposed implementation plan\""
-    assert prompt =~ "implementation_status: \"not_started\""
+    assert prompt =~ "\"current_role\": \"REVIEWER\""
+    assert prompt =~ "\"object_received\": \"Planner's proposed implementation plan\""
+    assert prompt =~ "\"implementation_status\": \"not_started\""
     assert prompt =~ "absence of planned mutations is expected"
   end
 

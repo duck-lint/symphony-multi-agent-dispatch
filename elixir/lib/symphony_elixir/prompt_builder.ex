@@ -14,6 +14,7 @@ defmodule SymphonyElixir.PromptBuilder do
     profile = profile_for(role, Map.get(context, :role_profile) || RoleProfiles.profile!(role))
     handoff = Map.get(context, :handoff)
     runtime_authority = Map.get(context, :runtime_authority)
+    environment_capabilities = Map.get(context, :environment_capabilities)
     lifecycle_context = Map.get(context, :lifecycle_context)
     correction_feedback = Map.get(context, :correction_feedback)
 
@@ -24,6 +25,7 @@ defmodule SymphonyElixir.PromptBuilder do
     #{String.trim(profile.instructions)}
 
     #{optional_context_section("Host-enforced runtime authority", runtime_authority)}
+    #{optional_context_section("Host-verified environment capabilities (current dispatch)", environment_capabilities)}
     #{optional_context_section("Host-derived lifecycle context", lifecycle_context)}
     #{reconciliation_section(handoff)}
     #{revision_reconciliation_section(role, handoff)}
@@ -46,7 +48,12 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp format_context(nil), do: "No additional handoff was supplied."
   defp format_context(context) when is_binary(context), do: context
-  defp format_context(context), do: inspect(context, pretty: true)
+
+  # Structured lifecycle evidence must remain complete at the prompt boundary.
+  # Jason is also the repository's durable lifecycle-ledger encoding, so this
+  # keeps prompt evidence in the same explicit, machine-readable representation
+  # without changing which events or fields the coordinator selected.
+  defp format_context(context), do: Jason.encode!(context, pretty: true)
 
   defp handoff_reconciliation(%{reconciliation: reconciliation}), do: reconciliation
   defp handoff_reconciliation(_handoff), do: nil
