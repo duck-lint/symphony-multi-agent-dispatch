@@ -583,8 +583,6 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end)
   end
 
-  defp accepted_planner_result?(_history, _result), do: false
-
   defp validate_planner_revision_reconciliation(result, projection) do
     reconciliation = Map.get(result, "revision_reconciliation")
     expected_finding_refs = Enum.map(projection.reviewer_findings, & &1["finding_ref"])
