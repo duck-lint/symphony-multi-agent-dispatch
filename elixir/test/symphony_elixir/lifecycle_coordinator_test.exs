@@ -153,7 +153,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     state_after = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
     assert state_after.comments == state_before.comments
     assert {:ok, %{history: history}} = LifecycleCoordinator.prepare_dispatch(github_issue())
-    assert history.planning_attempt == 1
+    assert history.planning_attempt == 2
     assert LifecycleCoordinator.correctable_role_result_error?(:missing_returning_planner_revision_reconciliation)
   end
 
@@ -195,7 +195,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     end
 
     assert {:ok, %{history: history}} = LifecycleCoordinator.prepare_dispatch(github_issue())
-    assert history.planning_attempt == 1
+    assert history.planning_attempt == 2
     assert length(history.events) == length(planner_revision_events(lifecycle_id))
   end
 

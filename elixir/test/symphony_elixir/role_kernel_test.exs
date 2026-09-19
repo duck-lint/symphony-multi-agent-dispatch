@@ -73,7 +73,7 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert RoleProfiles.role_for_label(:not_a_label) == []
     assert RoleProfiles.role_for_labels(:not_a_list) == {:error, :missing_role_label}
     assert RoleProfiles.result_contract_instructions() =~ "Do not emit next_role"
-    assert RoleProfiles.result_contract_instructions(:planner) =~ "Planner revision reconciliation contract"
+    assert RoleProfiles.result_contract_instructions(:planner) =~ "\"revision_reconciliation\""
   end
 
   test "role prompts share the evidence contract and retain distinct behavior" do

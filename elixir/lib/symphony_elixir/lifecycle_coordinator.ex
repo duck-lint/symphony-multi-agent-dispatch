@@ -169,16 +169,17 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp commit_validated_result(current_issue, history, expected_role, validated_result) do
-    with :ok <- validate_evidence_reconciliation(history, validated_result) do
-      case idempotent_result(history, current_issue, validated_result, expected_role) do
-        {:ok, _commit} = ok ->
-          ok
+    case idempotent_result(history, current_issue, validated_result, expected_role) do
+      {:ok, _commit} = ok ->
+        ok
 
-        :not_found ->
+      :not_found ->
+        with :ok <- validate_evidence_reconciliation(history, validated_result) do
           persist_new_transition(current_issue, history, expected_role, validated_result)
+        end
 
-        {:error, _reason} = error ->
-          error
+      {:error, _reason} = error ->
+        error
       end
     end
   end

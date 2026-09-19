@@ -77,6 +77,12 @@ defmodule SymphonyElixir.PromptBuilder do
     #{format_context(projection)}
 
     For this revised planning attempt:
+    - Serialize a "revision_reconciliation" object with exactly "rejected_planner_transition_id",
+      "reviewer_transition_id", and "finding_responses"; copy both transition IDs from the projection.
+    - Include one finding response for every projected finding, in displayed order, with exactly
+      "finding_ref", "assessment", and "plan_excerpt"; copy each deterministic finding reference exactly once.
+    - For "plan_ready", use an exact excerpt from the resulting plan text in "summary" for each response.
+      For "await_human" or "non_converged", set each "plan_excerpt" to JSON null.
     - Compare the rejected plan against every Reviewer finding and its supporting evidence.
     - State what the original plan did and did not establish.
     - Assess each finding as a genuine defect, an already-satisfied requirement, an authority conflict, or an unresolved question.
