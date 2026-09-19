@@ -1,6 +1,8 @@
+Symphony
+Copyright 2025 OpenAI
+
 Symphony Multi-Agent Dispatch
-Copyright 2026 duck-lint
+Modifications copyright 2026 duck-lint (Madison).
+Derived from OpenAI's Symphony project: https://github.com/openai/symphony
 
-Symphony Multi-Agent Dispatch was designed and created by Madison (`duck-lint`).
-
-This product includes software developed upstream as part of OpenAI's Symphony project.
+The upstream and modified project are distributed under the Apache License, Version 2.0; see LICENSE.

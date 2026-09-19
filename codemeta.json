@@ -1,0 +1,28 @@
+{
+  "@context": "https://w3id.org/codemeta/3.1",
+  "name": "SYMPHONY Multi-Agent Dispatch",
+  "description": "Task-centered engineering orchestration with a host-governed multi-role lifecycle, bounded role authority, and inspectable handoffs. An experimental upstream-derived extension of OpenAI Symphony.",
+  "codeRepository": "https://github.com/duck-lint/symphony-multi-agent-dispatch",
+  "url": "https://github.com/duck-lint/symphony-multi-agent-dispatch",
+  "isBasedOn": "https://github.com/openai/symphony",
+  "license": "https://spdx.org/licenses/Apache-2.0",
+  "author": {
+    "name": "Madison",
+    "url": "https://github.com/duck-lint",
+    "@type": "Person",
+    "@id": "https://github.com/duck-lint"
+  },
+  "programmingLanguage": "Elixir",
+  "developmentStatus": "active",
+  "applicationCategory": "DeveloperApplication",
+  "keywords": [
+    "agent orchestration",
+    "coding agents",
+    "engineering workflow",
+    "multi-agent systems",
+    "task orchestration"
+  ],
+  "issueTracker": "https://github.com/duck-lint/symphony-multi-agent-dispatch/issues",
+  "continuousIntegration": "https://github.com/duck-lint/symphony-multi-agent-dispatch/actions",
+  "@type": "SoftwareSourceCode"
+}
