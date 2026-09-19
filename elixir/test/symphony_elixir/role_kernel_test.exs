@@ -73,7 +73,7 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert RoleProfiles.role_for_label(:not_a_label) == []
     assert RoleProfiles.role_for_labels(:not_a_list) == {:error, :missing_role_label}
     assert RoleProfiles.result_contract_instructions() =~ "Do not emit next_role"
-    assert RoleProfiles.result_contract_instructions(:planner) =~ "\"revision_reconciliation\""
+    refute RoleProfiles.result_contract_instructions(:planner) =~ "Planner revision reconciliation"
   end
 
   test "role prompts share the evidence contract and retain distinct behavior" do
@@ -249,6 +249,83 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert {:error, {:revision_reconciliation_not_allowed_for_role, :reviewer}} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "revise"), "revision_reconciliation", reconciliation))
+  end
+
+  test "Planner revision reconciliation schema rejects malformed response shapes" do
+    base = valid_result("PLANNER", "plan_ready")
+
+    reconciliation = %{
+      "rejected_planner_transition_id" => "life:r1:p1:PLANNER:plan_ready",
+      "reviewer_transition_id" => "life:r1:p1:REVIEWER:revise",
+      "finding_responses" => [
+        %{
+          "finding_ref" => "life:r1:p1:REVIEWER:revise:finding:0",
+          "assessment" => "The finding identifies a genuine defect.",
+          "plan_excerpt" => "bounded result"
+        }
+      ]
+    }
+
+    assert {:error, :invalid_revision_reconciliation} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", []))
+
+    assert {:error, {:unknown_revision_reconciliation_fields, _}} =
+             Lifecycle.validate_result(
+               Map.put(base, "revision_reconciliation", Map.put(reconciliation, "extra", true))
+             )
+
+    assert {:error, {:missing_revision_reconciliation_fields, _}} =
+             Lifecycle.validate_result(
+               Map.put(base, "revision_reconciliation", Map.delete(reconciliation, "reviewer_transition_id"))
+             )
+
+    assert {:error, :invalid_revision_finding_responses} =
+             Lifecycle.validate_result(
+               Map.put(base, "revision_reconciliation", Map.put(reconciliation, "finding_responses", %{}))
+             )
+
+    assert {:error, :invalid_revision_finding_response} =
+             Lifecycle.validate_result(
+               Map.put(base, "revision_reconciliation", Map.put(reconciliation, "finding_responses", [nil]))
+             )
+
+    malformed_response =
+      put_in(reconciliation, ["finding_responses", Access.at(0)], %{
+        "finding_ref" => "life:r1:p1:REVIEWER:revise:finding:0",
+        "assessment" => "",
+        "plan_excerpt" => "bounded result"
+      })
+
+    assert {:error, {:invalid_revision_reconciliation, {:empty_field, :assessment}}} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", malformed_response))
+
+    malformed_response =
+      put_in(reconciliation, ["finding_responses", Access.at(0)], %{
+        "finding_ref" => "life:r1:p1:REVIEWER:revise:finding:0",
+        "assessment" => "The finding identifies a genuine defect.",
+        "plan_excerpt" => "bounded result",
+        "extra" => true
+      })
+
+    assert {:error, {:unknown_revision_finding_response_fields, _}} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", malformed_response))
+
+    malformed_response =
+      put_in(reconciliation, ["finding_responses", Access.at(0)], %{
+        "finding_ref" => "life:r1:p1:REVIEWER:revise:finding:0",
+        "assessment" => "The finding identifies a genuine defect."
+      })
+
+    assert {:error, {:missing_revision_finding_response_fields, _}} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", malformed_response))
+
+    await_human =
+      valid_result("PLANNER", "await_human")
+      |> Map.put("human_question", "Authorize the missing external capability.")
+      |> Map.put("revision_reconciliation", reconciliation)
+
+    assert {:error, {:unexpected_revision_plan_excerpt, "await_human"}} =
+             Lifecycle.validate_result(await_human)
   end
 
   test "lifecycle context describes the generic role metamap without changing routing" do

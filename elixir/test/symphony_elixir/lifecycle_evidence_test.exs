@@ -115,6 +115,22 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
     assert LifecycleEvidence.revision_projection(history.([base, Map.put(reviewer, "lifecycle_id", "other-life")])) == nil
   end
 
+  test "revision projection preserves an accepted review with no findings" do
+    lifecycle_id = "life-empty-review"
+    planner = revision_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)
+    reviewer = revision_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, 1)
+    history = %{
+      active?: true,
+      current_role: :planner,
+      lifecycle_id: lifecycle_id,
+      round: 1,
+      planning_attempt: 2,
+      events: [planner, Map.delete(reviewer, "findings")]
+    }
+
+    assert LifecycleEvidence.revision_projection(history).reviewer_findings == []
+  end
+
   test "round projection preserves only matching lifecycle specialist events" do
     history = %{
       lifecycle_id: "life-current",
