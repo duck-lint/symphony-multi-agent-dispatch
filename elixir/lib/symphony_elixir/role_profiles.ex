@@ -407,7 +407,7 @@ defmodule SymphonyElixir.RoleProfiles do
     contract = """
     Return exactly one JSON object and no Markdown or surrounding prose. It must contain these
     required top-level keys and no other keys unless the human_question, prerequisite_resolution,
-    reconciliation, or escalation_basis rules below permit it: "schema", "role", "outcome", "summary", "evidence", and "findings".
+    reconciliation, revision_reconciliation, or escalation_basis rules below permit it: "schema", "role", "outcome", "summary", "evidence", and "findings".
     "schema" must be exactly "symphony.role-result/v1". "role" must be exactly "#{role_name}"
     (one of PM, PLANNER, REVIEWER, IMPLEMENTER, ADVERSARY, or ARCHIVIST). For this #{role_name}
     role, "outcome" must be exactly one of: #{allowed_outcomes}. Do not invent synonyms such as "handoff" or "done".
@@ -449,7 +449,31 @@ defmodule SymphonyElixir.RoleProfiles do
           your interpretation is correct.
         """
     else
-      contract
+      if role == :planner do
+        contract <>
+          """
+          Planner revision reconciliation contract:
+          - When the host supplies a revision-reconciliation projection after a Reviewer "revise",
+            include a "revision_reconciliation" object with exactly "rejected_planner_transition_id",
+            "reviewer_transition_id", and "finding_responses". Copy the two transition IDs from the
+            host projection exactly.
+          - "finding_responses" must contain one item for every host-projected Reviewer finding in
+            displayed order. Each item must have exactly "finding_ref", "assessment", and "plan_excerpt".
+            Copy each deterministic "finding_ref" exactly once. The assessment must explain whether the
+            finding identifies a genuine defect, an already-satisfied requirement, an authority conflict,
+            or an unresolved question, with evidence-supported disagreement permitted.
+          - For "plan_ready", each "plan_excerpt" must be an exact excerpt from the resulting plan text
+            in "summary" and must identify the concrete correction, verification obligation, and owner
+            where applicable. For "await_human" or "non_converged", set each "plan_excerpt" to JSON null;
+            account for every finding without claiming an executable correction.
+          - Acknowledging or paraphrasing a finding is not a correction. The host checks provenance and
+            exact excerpts only; the Reviewer remains responsible for judging semantic adequacy.
+          - When the host does not supply a revision-reconciliation projection, omit
+            "revision_reconciliation" or set it to JSON null.
+          """
+      else
+        contract
+      end
     end
   end
 end

@@ -26,6 +26,7 @@ defmodule SymphonyElixir.PromptBuilder do
     #{optional_context_section("Host-enforced runtime authority", runtime_authority)}
     #{optional_context_section("Host-derived lifecycle context", lifecycle_context)}
     #{reconciliation_section(handoff)}
+    #{revision_reconciliation_section(role, handoff)}
     #{optional_context_section("Host correction diagnostic (the prior result was not committed; correct the result contract only)", correction_feedback)}
     #{RoleProfiles.result_contract_instructions(profile.role)}
 
@@ -67,6 +68,26 @@ defmodule SymphonyElixir.PromptBuilder do
         )
     end
   end
+
+  defp revision_reconciliation_section(:planner, %{revision_reconciliation: projection})
+       when is_map(projection) do
+    """
+
+    Planner revision reconciliation (host-required evidence accounting; not a semantic verdict):
+    #{format_context(projection)}
+
+    For this revised planning attempt:
+    - Compare the rejected plan against every Reviewer finding and its supporting evidence.
+    - State what the original plan did and did not establish.
+    - Assess each finding as a genuine defect, an already-satisfied requirement, an authority conflict, or an unresolved question.
+    - Incorporate warranted corrections while retaining valid portions of the original plan.
+    - Account for every finding individually, including evidence-supported disagreement.
+    - For each finding, identify the corresponding correction in the revised plan with concrete verification obligations and execution ownership where applicable. Do not require yourself to execute verification owned by the Implementer.
+    - Acknowledging or paraphrasing a finding is not a correction. The host checks references and exact excerpts; the Reviewer judges semantic adequacy.
+    """
+  end
+
+  defp revision_reconciliation_section(_role, _handoff), do: ""
 
   defp profile_for(role, %{role: role} = profile), do: profile
 

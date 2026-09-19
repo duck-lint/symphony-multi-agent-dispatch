@@ -58,10 +58,25 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       :missing_returning_pm_reconciliation,
       :returning_pm_missing_completed_round_evidence,
       :missing_returning_pm_escalation_evidence,
-      :missing_pm_escalation_basis
+      :missing_pm_escalation_basis,
+      :missing_returning_planner_revision_reconciliation,
+      :unexpected_planner_revision_reconciliation,
+      :invalid_revision_reconciliation,
+      :invalid_revision_finding_responses,
+      :invalid_revision_finding_response,
+      :invalid_revision_plan_excerpt,
+      :unexpected_revision_plan_excerpt
     ] or
       match?({:invalid_reconciliation_reference, _}, reason) or
-      match?({:invalid_escalation_reference, _}, reason)
+      match?({:invalid_escalation_reference, _}, reason) or
+      match?({:invalid_planner_revision_reconciliation, _}, reason) or
+      match?({:invalid_revision_finding_references, _}, reason) or
+      match?({:unknown_revision_reconciliation_fields, _}, reason) or
+      match?({:missing_revision_reconciliation_fields, _}, reason) or
+      match?({:unknown_revision_finding_response_fields, _}, reason) or
+      match?({:missing_revision_finding_response_fields, _}, reason) or
+      match?({:unexpected_revision_plan_excerpt, _}, reason) or
+      match?({:invalid_revision_plan_excerpt, _}, reason)
   end
 
   @spec block_pm_continuity(Issue.t(), term(), keyword()) :: {:ok, Issue.t()} | {:error, term()}
@@ -145,17 +160,17 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp commit_validated_result(current_issue, history, expected_role, validated_result) do
-    case idempotent_result(history, current_issue, validated_result, expected_role) do
-      {:ok, _commit} = ok ->
-        ok
+    with :ok <- validate_evidence_reconciliation(history, validated_result) do
+      case idempotent_result(history, current_issue, validated_result, expected_role) do
+        {:ok, _commit} = ok ->
+          ok
 
-      :not_found ->
-        with :ok <- validate_evidence_reconciliation(history, validated_result) do
+        :not_found ->
           persist_new_transition(current_issue, history, expected_role, validated_result)
-        end
 
-      {:error, _reason} = error ->
-        error
+        {:error, _reason} = error ->
+          error
+      end
     end
   end
 
@@ -209,6 +224,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       end) and
       Map.get(event, "human_question") == Map.get(result, "human_question") and
       Map.get(event, "reconciliation") == Map.get(result, "reconciliation") and
+      Map.get(event, "revision_reconciliation") == Map.get(result, "revision_reconciliation") and
       Map.get(event, "escalation_basis") == Map.get(result, "escalation_basis") and
       (event["kind"] != "terminal" or
          event["terminal_reason"] in expected_terminal_reasons(result))
@@ -244,10 +260,11 @@ defmodule SymphonyElixir.LifecycleCoordinator do
            "summary" => event["summary"],
            "evidence" => event["evidence"],
            "findings" => event["findings"],
-           "human_question" => event["human_question"],
-           "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
-           "reconciliation" => Map.get(event, "reconciliation"),
-           "escalation_basis" => Map.get(event, "escalation_basis")
+          "human_question" => event["human_question"],
+          "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
+          "reconciliation" => Map.get(event, "reconciliation"),
+          "revision_reconciliation" => Map.get(event, "revision_reconciliation"),
+          "escalation_basis" => Map.get(event, "escalation_basis")
          }
        }}
     end
@@ -279,6 +296,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       preceding_adversary_findings: history.preceding_adversary_findings,
       prerequisite_context: Lifecycle.prerequisite_context(history),
       reconciliation: LifecycleEvidence.project(history),
+      revision_reconciliation: LifecycleEvidence.revision_projection(history),
       accepted_events: handoff_events
     }
   end
@@ -533,7 +551,114 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp validate_evidence_reconciliation(history, %{"role" => "PLANNER"} = result) do
+    case LifecycleEvidence.revision_projection(history) do
+      nil ->
+        if is_nil(Map.get(result, "revision_reconciliation")) or
+             accepted_planner_result?(history, result) do
+          :ok
+        else
+          {:error, :unexpected_planner_revision_reconciliation}
+        end
+
+      projection ->
+        validate_planner_revision_reconciliation(result, projection)
+    end
+  end
+
   defp validate_evidence_reconciliation(_history, _result), do: :ok
+
+  defp accepted_planner_result?(%{events: events}, result) when is_list(events) do
+    Enum.any?(events, fn event ->
+      event["role"] == "PLANNER" and event_material_matches_result?(event, result)
+    end)
+  end
+
+  defp accepted_planner_result?(_history, _result), do: false
+
+  defp validate_planner_revision_reconciliation(result, projection) do
+    reconciliation = Map.get(result, "revision_reconciliation")
+    expected_finding_refs = Enum.map(projection.reviewer_findings, & &1["finding_ref"])
+
+    with :ok <- validate_revision_reconciliation_present(reconciliation),
+         :ok <- validate_revision_transition_ids(reconciliation, projection),
+         :ok <- validate_revision_finding_refs(reconciliation, expected_finding_refs),
+         :ok <- validate_revision_finding_assessments(reconciliation["finding_responses"]),
+         :ok <- validate_revision_plan_excerpts(result, reconciliation["finding_responses"]) do
+      :ok
+    end
+  end
+
+  defp validate_revision_reconciliation_present(reconciliation) when is_map(reconciliation), do: :ok
+
+  defp validate_revision_reconciliation_present(_reconciliation),
+    do: {:error, :missing_returning_planner_revision_reconciliation}
+
+  defp validate_revision_transition_ids(reconciliation, projection) do
+    expected = %{
+      "rejected_planner_transition_id" => projection.rejected_planner["transition_id"],
+      "reviewer_transition_id" => projection.reviewer["transition_id"]
+    }
+
+    received = Map.take(reconciliation, Map.keys(expected))
+
+    if received == expected do
+      :ok
+    else
+      {:error, {:invalid_planner_revision_reconciliation, %{expected: expected, received: received}}}
+    end
+  end
+
+  defp validate_revision_finding_refs(reconciliation, expected_refs) do
+    responses = reconciliation["finding_responses"]
+    received_refs = if is_list(responses), do: Enum.map(responses, &Map.get(&1, "finding_ref")), else: responses
+
+    if received_refs == expected_refs do
+      :ok
+    else
+      {:error, {:invalid_revision_finding_references, %{expected: expected_refs, received: received_refs}}}
+    end
+  end
+
+  defp validate_revision_finding_assessments(responses) when is_list(responses) do
+    if Enum.all?(responses, &(is_binary(Map.get(&1, "assessment")) and String.trim(Map.get(&1, "assessment")) != "")) do
+      :ok
+    else
+      {:error, {:invalid_planner_revision_reconciliation, :missing_finding_assessment}}
+    end
+  end
+
+  defp validate_revision_finding_assessments(_responses),
+    do: {:error, {:invalid_planner_revision_reconciliation, :invalid_finding_responses}}
+
+  defp validate_revision_plan_excerpts(%{"outcome" => "plan_ready"} = result, responses)
+       when is_list(responses) do
+    plan_text = result["summary"]
+
+    cond do
+      not is_binary(plan_text) ->
+        {:error, {:invalid_revision_plan_excerpt, :planner_summary_not_text}}
+
+      Enum.any?(responses, fn response ->
+        excerpt = response["plan_excerpt"]
+        not (is_binary(excerpt) and String.trim(excerpt) != "" and String.contains?(plan_text, excerpt))
+      end) ->
+        {:error, {:invalid_revision_plan_excerpt, :excerpt_not_in_plan_summary}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_revision_plan_excerpts(%{"outcome" => outcome}, responses)
+       when outcome in ["await_human", "non_converged"] and is_list(responses) do
+    if Enum.all?(responses, &is_nil(&1["plan_excerpt"])),
+      do: :ok,
+      else: {:error, {:invalid_revision_plan_excerpt, :non_executable_outcome_has_plan_excerpt}}
+  end
+
+  defp validate_revision_plan_excerpts(_result, _responses),
+    do: {:error, :invalid_revision_plan_excerpt}
 
   defp validate_pm_reconciliation(history, result) do
     case reconciliation_projection(history, result) do
@@ -763,6 +888,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       "human_question" => Map.get(result, "human_question"),
       "prerequisite_resolution" => Map.get(result, "prerequisite_resolution"),
       "reconciliation" => Map.get(result, "reconciliation"),
+      "revision_reconciliation" => Map.get(result, "revision_reconciliation"),
       "escalation_basis" => Map.get(result, "escalation_basis"),
       "terminal_reason" => Map.get(transition, :terminal_reason)
     })

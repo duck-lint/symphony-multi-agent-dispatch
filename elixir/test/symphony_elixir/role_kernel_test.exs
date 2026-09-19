@@ -73,6 +73,7 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert RoleProfiles.role_for_label(:not_a_label) == []
     assert RoleProfiles.role_for_labels(:not_a_list) == {:error, :missing_role_label}
     assert RoleProfiles.result_contract_instructions() =~ "Do not emit next_role"
+    assert RoleProfiles.result_contract_instructions(:planner) =~ "Planner revision reconciliation contract"
   end
 
   test "role prompts share the evidence contract and retain distinct behavior" do
@@ -132,6 +133,24 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert returning_pm_prompt =~ "life:r1:p1:ADVERSARY:review_complete"
     assert returning_pm_prompt =~ "Host correction diagnostic"
     assert returning_pm_prompt =~ "PM reconciliation contract"
+
+    planner_revision_prompt =
+      PromptBuilder.build_prompt(issue, :planner, %{
+        handoff: %{
+          revision_reconciliation: %{
+            rejected_planner: %{summary: "Original plan"},
+            reviewer: %{summary: "Exact command is required"},
+            reviewer_findings: [%{"finding_ref" => "life:r1:p1:REVIEWER:revise:finding:0"}]
+          }
+        }
+      })
+
+    assert planner_revision_prompt =~ "Planner revision reconciliation"
+    assert planner_revision_prompt =~ "Compare the rejected plan against every Reviewer finding"
+    assert planner_revision_prompt =~ "life:r1:p1:REVIEWER:revise:finding:0"
+    assert planner_revision_prompt =~ "Do not require yourself to execute verification owned by the Implementer"
+
+    refute PromptBuilder.build_prompt(issue, :planner) =~ "Planner revision reconciliation"
 
     {:ok, reviewer_policy} = RoleRuntimePolicy.for_role(:reviewer, "/tmp/issue-workspace")
 
@@ -196,6 +215,38 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert prompt =~ "object_received: \"Planner's proposed implementation plan\""
     assert prompt =~ "implementation_status: \"not_started\""
     assert prompt =~ "absence of planned mutations is expected"
+  end
+
+  test "Planner revision reconciliation is structural and outcome-sensitive" do
+    base = valid_result("PLANNER", "plan_ready")
+    reconciliation = %{
+      "rejected_planner_transition_id" => "life:r1:p1:PLANNER:plan_ready",
+      "reviewer_transition_id" => "life:r1:p1:REVIEWER:revise",
+      "finding_responses" => [
+        %{
+          "finding_ref" => "life:r1:p1:REVIEWER:revise:finding:0",
+          "assessment" => "The finding identifies a genuine defect.",
+          "plan_excerpt" => "bounded result"
+        }
+      ]
+    }
+
+    assert {:ok, _} = Lifecycle.validate_result(Map.put(base, "revision_reconciliation", reconciliation))
+
+    await_human =
+      valid_result("PLANNER", "await_human")
+      |> Map.put("human_question", "Authorize the missing external capability.")
+      |> Map.put("revision_reconciliation", put_in(reconciliation, ["finding_responses", Access.at(0), "plan_excerpt"], nil))
+
+    assert {:ok, _} = Lifecycle.validate_result(await_human)
+
+    non_converged =
+      valid_result("PLANNER", "non_converged")
+      |> Map.put("revision_reconciliation", put_in(reconciliation, ["finding_responses", Access.at(0), "plan_excerpt"], nil))
+
+    assert {:ok, _} = Lifecycle.validate_result(non_converged)
+    assert {:error, {:revision_reconciliation_not_allowed_for_role, :reviewer}} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "revise"), "revision_reconciliation", reconciliation))
   end
 
   test "lifecycle context describes the generic role metamap without changing routing" do
@@ -508,6 +559,46 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert state.running == %{}
     assert state.retry_attempts == %{}
     assert state.blocked[issue.id].role_execution == nil
+  end
+
+  test "Planner revision contract correction is bounded independently and does not add lifecycle state" do
+    issue = %Issue{id: "issue-planner-contract", identifier: "MT-PLANNER-CONTRACT", url: "https://example.test/issue-planner-contract"}
+    ref = make_ref()
+
+    running_entry = %{
+      ref: ref,
+      pid: self(),
+      identifier: issue.identifier,
+      issue: issue,
+      role: :planner,
+      correction_attempt: 0,
+      retry_attempt: 0,
+      worker_host: nil,
+      workspace_path: nil,
+      session_id: "session-planner-contract",
+      started_at: DateTime.utc_now()
+    }
+
+    state = %Orchestrator.State{
+      running: %{issue.id => running_entry},
+      claimed: MapSet.new([issue.id]),
+      retry_attempts: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    {:noreply, state} =
+      Orchestrator.handle_info(
+        {:role_execution_failed, issue.id, %{kind: :role_result_contract, role: :planner, reason: :missing_returning_planner_revision_reconciliation}},
+        state
+      )
+
+    {:noreply, state} = Orchestrator.handle_info({:DOWN, ref, :process, self(), :normal}, state)
+    assert state.running == %{}
+    assert %{error: error, correction_feedback: feedback, correction_attempt: correction_attempt, timer_ref: timer_ref} = state.retry_attempts[issue.id]
+    assert error =~ "Planner result contract correction required"
+    assert feedback =~ "missing_returning_planner_revision_reconciliation"
+    assert correction_attempt == 1
+    Process.cancel_timer(timer_ref)
   end
 
   test "finding severity, human question, and transition result validation are bounded" do

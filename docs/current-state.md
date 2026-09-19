@@ -111,6 +111,14 @@ invalid references are correctable role-result errors: the same PM thread receiv
 at most three corrections, after which the lifecycle is visibly blocked without committing the rejected result.
 Old lifecycle events remain readable when these additive PM fields are absent.
 
+For a Planner returning after a Reviewer `revise`, the host builds a separate pure projection containing the exact
+rejected Planner event, triggering Reviewer event, and deterministic finding references. The Planner must account for
+every reference; `plan_ready` responses must provide excerpts found verbatim in the resulting plan summary, while
+`await_human` and `non_converged` responses account for findings without claiming an executable correction. The host
+checks identity, completeness, and excerpt provenance only; the next Reviewer judges semantic adequacy. Invalid
+Planner reconciliation is retried as a fresh Planner with a separate bounded technical-correction budget and does not
+consume a planning attempt. Historical events without this additive field remain readable.
+
 ## Runtime configuration and provenance
 
 The required Codex runtime configuration is `gpt-5.6-luna` with reasoning effort `high`, supplied through

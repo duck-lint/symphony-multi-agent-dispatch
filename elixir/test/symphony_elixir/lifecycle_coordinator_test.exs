@@ -115,6 +115,147 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert first_planner_context == second_planner_context
   end
 
+  test "Reviewer revision dispatch carries the exact Planner and Reviewer evidence pair" do
+    lifecycle_id = "planner-revision"
+    install_planner_revision_history(planner_revision_events(lifecycle_id))
+
+    assert {:ok, %{history: history, handoff: handoff}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    assert history.current_role == :planner
+    projection = handoff.revision_reconciliation
+    [planner_event, reviewer_event] = Enum.take([Enum.at(history.events, -2), Enum.at(history.events, -1)], 2)
+
+    assert projection.rejected_planner["transition_id"] == planner_event["transition_id"]
+    assert projection.rejected_planner["summary"] == planner_event["summary"]
+    assert projection.rejected_planner["evidence"] == planner_event["evidence"]
+    assert projection.reviewer["transition_id"] == reviewer_event["transition_id"]
+    assert projection.reviewer["findings"] == reviewer_event["findings"]
+    assert Enum.map(projection.reviewer_findings, & &1["finding_ref"]) ==
+             Enum.with_index(reviewer_event["findings"])
+             |> Enum.map(fn {_finding, index} -> "#{reviewer_event["transition_id"]}:finding:#{index}" end)
+  end
+
+  test "revised Planner cannot commit without complete host reconciliation" do
+    lifecycle_id = "planner-revision-missing"
+    install_planner_revision_history(planner_revision_events(lifecycle_id))
+    assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    result = planner_revision_result(projection, "Install with the exact command and verify independently.")
+    state_before = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+
+    assert {:error, :missing_returning_planner_revision_reconciliation} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, Map.delete(result, "revision_reconciliation"))
+
+    state_after = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+    assert state_after.comments == state_before.comments
+    assert {:ok, %{history: history}} = LifecycleCoordinator.prepare_dispatch(github_issue())
+    assert history.planning_attempt == 1
+    assert LifecycleCoordinator.correctable_role_result_error?(:missing_returning_planner_revision_reconciliation)
+  end
+
+  test "revised Planner rejects stale, duplicate, fabricated, and invalid excerpt references" do
+    lifecycle_id = "planner-revision-invalid"
+    install_planner_revision_history(planner_revision_events(lifecycle_id))
+    assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    valid = planner_revision_result(projection, "Install exact command. Verify independently.")
+    refs = Enum.map(projection.reviewer_findings, & &1["finding_ref"])
+
+    invalid_results = [
+      put_in(valid, ["revision_reconciliation", "finding_responses"],
+        List.replace_at(valid["revision_reconciliation"]["finding_responses"], 1, %{
+          "finding_ref" => List.first(refs),
+          "assessment" => "duplicate",
+          "plan_excerpt" => "Verify independently."
+        })),
+      put_in(valid, ["revision_reconciliation", "finding_responses"],
+        List.replace_at(valid["revision_reconciliation"]["finding_responses"], 0, %{
+          "finding_ref" => "other-review:finding:0",
+          "assessment" => "fabricated",
+          "plan_excerpt" => "Install exact command."
+        })),
+      put_in(valid, ["revision_reconciliation", "reviewer_transition_id"], "stale-reviewer"),
+      put_in(valid, ["revision_reconciliation", "finding_responses", Access.at(0), "plan_excerpt"], "not in plan")
+    ]
+
+    for invalid <- invalid_results do
+      assert {:error, _reason} = LifecycleCoordinator.commit_role_result(github_issue(), :planner, invalid)
+    end
+
+    assert {:ok, %{history: history}} = LifecycleCoordinator.prepare_dispatch(github_issue())
+    assert history.planning_attempt == 1
+    assert length(history.events) == length(planner_revision_events(lifecycle_id))
+  end
+
+  test "complete Planner reconciliation persists, replays, and reaches Reviewer without semantic approval" do
+    lifecycle_id = "planner-revision-valid"
+    install_planner_revision_history(planner_revision_events(lifecycle_id))
+    assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    # The summary is structurally valid even though it remains substantively generic;
+    # the next Reviewer, not this host check, judges whether the correction is adequate.
+    result = planner_revision_result(projection, "Install exact command. Verify independently.")
+
+    assert {:ok, %{event: event, idempotent?: false, issue: issue}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, result)
+
+    assert event["revision_reconciliation"] == result["revision_reconciliation"]
+    assert issue.labels == ["symphony:auto", "human-label", "symphony:role:reviewer"]
+
+    assert {:ok, %{history: history}} = LifecycleCoordinator.prepare_dispatch(issue)
+    assert List.last(history.events)["revision_reconciliation"] == result["revision_reconciliation"]
+
+    assert {:ok, %{idempotent?: true}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, result)
+  end
+
+  test "Planner await_human revision accounting does not bypass prerequisite authority" do
+    lifecycle_id = "planner-revision-await"
+    install_planner_revision_history(planner_revision_events(lifecycle_id))
+    assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    result =
+      planner_revision_result(projection, "The external prerequisite cannot be supplied by this role.")
+      |> Map.merge(%{
+        "outcome" => "await_human",
+        "human_question" => "Authorize the required external capability.",
+        "prerequisite_resolution" => external_prerequisite_report(),
+        "revision_reconciliation" => nil_excerpt_revision_reconciliation(projection)
+      })
+
+    assert {:ok, %{event: event}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, result)
+
+    assert event["kind"] == "escalation"
+    assert event["revision_reconciliation"] == result["revision_reconciliation"]
+  end
+
+  test "Planner non_converged revision accounting still requires complete prerequisite investigation" do
+    lifecycle_id = "planner-revision-non-converged"
+    install_planner_revision_history(planner_revision_events(lifecycle_id))
+    assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    result =
+      planner_revision_result(projection, "No feasible authorized path has been established.")
+      |> Map.merge(%{
+        "outcome" => "non_converged",
+        "prerequisite_resolution" => prerequisite_report(),
+        "revision_reconciliation" => nil_excerpt_revision_reconciliation(projection)
+      })
+
+    assert {:ok, %{event: event}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, result)
+
+    assert event["kind"] == "terminal"
+    assert event["terminal_reason"] == "prerequisite_no_feasible_authorized_path"
+  end
+
   test "reconciles Normalize issue #5 evidence without substituting either report" do
     lifecycle_id = "normalize-5"
     events = issue_five_round_events(lifecycle_id)
@@ -448,6 +589,76 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     }
   end
 
+  defp planner_revision_result(projection, summary) do
+    responses =
+      Enum.map(projection.reviewer_findings, fn finding ->
+        excerpt =
+          case finding["index"] do
+            0 -> "Install exact command."
+            1 -> "Verify independently."
+          end
+
+        %{
+          "finding_ref" => finding["finding_ref"],
+          "assessment" => "The finding is accounted for with evidence and an owned correction.",
+          "plan_excerpt" => excerpt
+        }
+      end)
+
+    role_result("PLANNER", "plan_ready", summary)
+    |> Map.put("revision_reconciliation", %{
+      "rejected_planner_transition_id" => projection.rejected_planner["transition_id"],
+      "reviewer_transition_id" => projection.reviewer["transition_id"],
+      "finding_responses" => responses
+    })
+  end
+
+  defp nil_excerpt_revision_reconciliation(projection) do
+    planner_revision_result(projection, "placeholder")["revision_reconciliation"]
+    |> Map.update!("finding_responses", fn responses ->
+      Enum.map(responses, &Map.put(&1, "plan_excerpt", nil))
+    end)
+  end
+
+  defp install_planner_revision_history(events) do
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{
+        state
+        | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:planner", "human-label"]},
+          comments: Enum.map(events, &%{"body" => LifecycleHistory.render(&1)})
+      }
+    end)
+  end
+
+  defp planner_revision_events(lifecycle_id) do
+    reviewer =
+      transition_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, 1)
+      |> Map.merge(%{
+        "summary" => "Require the exact installation command and independent console verification.",
+        "evidence" => ["Reviewer inspected the contract and plan."],
+        "findings" => [
+          %{
+            "severity" => "blocking",
+            "summary" => "The exact installation command is absent.",
+            "evidence" => ["The task requires the exact command to be named."]
+          },
+          %{
+            "severity" => "advisory",
+            "summary" => "Independent console verification is not assigned.",
+            "evidence" => ["The acceptance contract requires a separate console check."]
+          }
+        ]
+      })
+
+    [
+      LifecycleHistory.start_event(lifecycle_id),
+      transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1),
+      transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)
+      |> Map.put("summary", "Original plan omits the exact command and independent verification."),
+      reviewer
+    ]
+  end
+
   defp install_returning_pm_history(events) do
     Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
       %{
@@ -506,6 +717,14 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       "unlock_action" => "Supply evidence or capability for the missing prerequisite.",
       "resolution_status" => "no_feasible_authorized_path_established"
     }
+  end
+
+  defp external_prerequisite_report do
+    prerequisite_report()
+    |> Map.merge(%{
+      "authority_status" => "requires_external_action",
+      "resolution_status" => "external_prerequisite"
+    })
   end
 
   defp terminal_lifecycle_comments do

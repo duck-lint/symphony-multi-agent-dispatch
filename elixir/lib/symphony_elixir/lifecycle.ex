@@ -21,10 +21,13 @@ defmodule SymphonyElixir.Lifecycle do
     human_question
     prerequisite_resolution
     reconciliation
+    revision_reconciliation
     escalation_basis
   )
   @finding_keys ~w(severity summary evidence)
   @reconciliation_keys ~w(considered_transition_ids assessment)
+  @revision_reconciliation_keys ~w(rejected_planner_transition_id reviewer_transition_id finding_responses)
+  @revision_finding_response_keys ~w(finding_ref assessment plan_excerpt)
   @escalation_basis_keys ~w(required_external_action existing_authority_gap supporting_transition_ids)
   @prerequisite_resolution_keys ~w(
     blocked_objective
@@ -56,6 +59,7 @@ defmodule SymphonyElixir.Lifecycle do
          :ok <- validate_prerequisite_resolution(role, Map.get(result, "prerequisite_resolution")),
          :ok <- validate_human_question(outcome, Map.get(result, "human_question")),
          :ok <- validate_reconciliation(role, Map.get(result, "reconciliation")),
+         :ok <- validate_revision_reconciliation(role, outcome, Map.get(result, "revision_reconciliation")),
          :ok <- validate_escalation_basis(role, outcome, Map.get(result, "escalation_basis")) do
       {:ok, result}
     end
@@ -652,6 +656,83 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp validate_reconciliation(role, _reconciliation),
     do: {:error, {:reconciliation_not_allowed_for_role, role}}
+
+  defp validate_revision_reconciliation(_role, _outcome, nil), do: :ok
+
+  defp validate_revision_reconciliation(:planner, outcome, reconciliation) when is_map(reconciliation) do
+    unknown = Map.keys(reconciliation) -- @revision_reconciliation_keys
+    missing = @revision_reconciliation_keys -- Map.keys(reconciliation)
+
+    cond do
+      unknown != [] -> {:error, {:unknown_revision_reconciliation_fields, unknown}}
+      missing != [] -> {:error, {:missing_revision_reconciliation_fields, missing}}
+      true ->
+        with :ok <- validate_revision_string(reconciliation["rejected_planner_transition_id"], :rejected_planner_transition_id),
+             :ok <- validate_revision_string(reconciliation["reviewer_transition_id"], :reviewer_transition_id),
+             :ok <- validate_revision_finding_responses(outcome, reconciliation["finding_responses"]) do
+          :ok
+        end
+    end
+  end
+
+  defp validate_revision_reconciliation(:planner, _outcome, _reconciliation),
+    do: {:error, :invalid_revision_reconciliation}
+
+  defp validate_revision_reconciliation(role, _outcome, _reconciliation),
+    do: {:error, {:revision_reconciliation_not_allowed_for_role, role}}
+
+  defp validate_revision_finding_responses(outcome, responses) when is_list(responses) do
+    Enum.reduce_while(responses, :ok, fn response, :ok ->
+      case validate_revision_finding_response(outcome, response) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp validate_revision_finding_responses(_outcome, _responses),
+    do: {:error, :invalid_revision_finding_responses}
+
+  defp validate_revision_finding_response(outcome, response) when is_map(response) do
+    unknown = Map.keys(response) -- @revision_finding_response_keys
+    missing = @revision_finding_response_keys -- Map.keys(response)
+
+    cond do
+      unknown != [] -> {:error, {:unknown_revision_finding_response_fields, unknown}}
+      missing != [] -> {:error, {:missing_revision_finding_response_fields, missing}}
+      true ->
+        with :ok <- validate_revision_string(response["finding_ref"], :finding_ref),
+             :ok <- validate_revision_string(response["assessment"], :assessment),
+             :ok <- validate_revision_plan_excerpt(outcome, response["plan_excerpt"]) do
+          :ok
+        end
+    end
+  end
+
+  defp validate_revision_finding_response(_outcome, _response),
+    do: {:error, :invalid_revision_finding_response}
+
+  defp validate_revision_plan_excerpt("plan_ready", excerpt),
+    do: validate_revision_string(excerpt, :plan_excerpt)
+
+  defp validate_revision_plan_excerpt(outcome, nil) when outcome in ["await_human", "non_converged"], do: :ok
+
+  defp validate_revision_plan_excerpt(outcome, _excerpt) when outcome in ["await_human", "non_converged"],
+    do: {:error, {:unexpected_revision_plan_excerpt, outcome}}
+
+  defp validate_revision_plan_excerpt(_outcome, _excerpt),
+    do: {:error, :invalid_revision_plan_excerpt}
+
+  defp validate_revision_string(value, field) when is_binary(value) do
+    if String.trim(value) == "" do
+      {:error, {:invalid_revision_reconciliation, {:empty_field, field}}}
+    else
+      :ok
+    end
+  end
+
+  defp validate_revision_string(_value, field),
+    do: {:error, {:invalid_revision_reconciliation, {:invalid_field, field}}}
 
   defp validate_escalation_basis(:pm, "await_human", basis) when is_map(basis) do
     unknown = Map.keys(basis) -- @escalation_basis_keys

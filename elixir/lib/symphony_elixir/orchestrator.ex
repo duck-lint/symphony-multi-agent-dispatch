@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   @failure_retry_base_ms 10_000
   @max_pm_contract_corrections 3
+  @max_planner_contract_corrections 3
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @empty_codex_totals %{
@@ -273,12 +274,13 @@ defmodule SymphonyElixir.Orchestrator do
         release_issue_claim(state, issue_id)
 
       {:error, reason} ->
-        if role == :pm and LifecycleCoordinator.correctable_role_result_error?(reason) do
-          retry_pm_contract_correction(
+        if LifecycleCoordinator.correctable_role_result_error?(reason) and role in [:pm, :planner] do
+          retry_role_contract_correction(
             state,
             issue_id,
             running_entry,
             running_entry_session_id(running_entry),
+            role,
             reason
           )
         else
@@ -383,8 +385,8 @@ defmodule SymphonyElixir.Orchestrator do
         "rerunning the same lifecycle role: #{inspect(reason)}"
     )
 
-    if role == :pm do
-      retry_pm_contract_correction(state, issue_id, running_entry, session_id, reason)
+    if role in [:pm, :planner] do
+      retry_role_contract_correction(state, issue_id, running_entry, session_id, role, reason)
     else
       next_attempt = next_retry_attempt_from_running(running_entry)
 
@@ -398,12 +400,18 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp retry_pm_contract_correction(state, issue_id, running_entry, session_id, reason) do
+  defp retry_role_contract_correction(state, issue_id, running_entry, session_id, role, reason) do
+    {label, contract_name, max_corrections} =
+      case role do
+        :pm -> {"PM", "host evidence contract", @max_pm_contract_corrections}
+        :planner -> {"Planner", "host revision-reconciliation contract", @max_planner_contract_corrections}
+      end
+
     correction_attempt = Map.get(running_entry, :correction_attempt, 0)
 
-    if correction_attempt >= @max_pm_contract_corrections do
+    if correction_attempt >= max_corrections do
       diagnostic =
-        "PM result remained outside the host evidence contract after #{@max_pm_contract_corrections} corrections " <>
+        "#{label} result remained outside the #{contract_name} after #{max_corrections} corrections " <>
           "for issue_id=#{issue_id}: #{inspect(reason)}"
 
       Logger.error("#{diagnostic} session_id=#{session_id}")
@@ -426,7 +434,7 @@ defmodule SymphonyElixir.Orchestrator do
       schedule_issue_retry(state, issue_id, next_attempt, %{
         identifier: running_entry.identifier,
         issue_url: running_entry.issue.url,
-        error: "PM result contract correction required: #{inspect(reason)}",
+        error: "#{label} result contract correction required: #{inspect(reason)}",
         correction_feedback: inspect(reason),
         correction_attempt: correction_attempt + 1,
         worker_host: Map.get(running_entry, :worker_host),

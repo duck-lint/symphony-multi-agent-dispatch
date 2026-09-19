@@ -1,10 +1,11 @@
 defmodule SymphonyElixir.LifecycleEvidence do
   @moduledoc """
-  Pure projection of accepted specialist evidence for a returning PM.
+  Pure projections of accepted lifecycle evidence for host-owned handoffs.
 
   The input history is already reconstructed from the host-written lifecycle
-  ledger. This module only selects original event maps; it does not summarize,
-  interpret, or compare their free-text claims.
+  ledger. This module only selects original event maps and adds deterministic
+  references; it does not summarize, interpret, or compare their free-text
+  claims.
   """
 
   @specialist_roles ["PLANNER", "REVIEWER", "IMPLEMENTER", "ADVERSARY"]
@@ -53,4 +54,86 @@ defmodule SymphonyElixir.LifecycleEvidence do
       required_transition_ids: Enum.map(accepted_events, & &1["transition_id"])
     }
   end
+
+  @spec revision_projection(map()) :: map() | nil
+  def revision_projection(%{
+        active?: true,
+        current_role: :planner,
+        lifecycle_id: lifecycle_id,
+        round: round,
+        planning_attempt: planning_attempt,
+        events: events
+      })
+      when is_binary(lifecycle_id) and is_integer(round) and is_integer(planning_attempt) and
+             is_list(events) do
+    if planning_attempt > 0 do
+      triggering_attempt = planning_attempt - 1
+
+      case Enum.reverse(events) do
+        [reviewer, planner | _older_events] ->
+          if revision_pair?(lifecycle_id, round, triggering_attempt, planner, reviewer) do
+            %{
+              lifecycle_id: lifecycle_id,
+              round: round,
+              planning_attempt: triggering_attempt,
+              rejected_planner: event_projection(planner),
+              reviewer: event_projection(reviewer),
+              reviewer_findings: finding_projection(reviewer)
+            }
+          end
+
+        _ ->
+          nil
+      end
+    end
+  end
+
+  def revision_projection(_history), do: nil
+
+  defp revision_pair?(lifecycle_id, round, planning_attempt, planner, reviewer) do
+    event_identity?(planner, lifecycle_id, round, planning_attempt, "PLANNER", "plan_ready", "REVIEWER") and
+      event_identity?(reviewer, lifecycle_id, round, planning_attempt, "REVIEWER", "revise", "PLANNER")
+  end
+
+  defp event_identity?(event, lifecycle_id, round, planning_attempt, role, outcome, to_role) do
+    event["lifecycle_id"] == lifecycle_id and
+      event["round"] == round and
+      event["planning_attempt"] == planning_attempt and
+      event["role"] == role and
+      event["from_role"] == role and
+      event["outcome"] == outcome and
+      event["to_role"] == to_role and
+      is_binary(event["transition_id"])
+  end
+
+  defp event_projection(event) do
+    Map.take(event, [
+      "transition_id",
+      "role",
+      "from_role",
+      "outcome",
+      "summary",
+      "evidence",
+      "findings",
+      "round",
+      "planning_attempt"
+    ])
+  end
+
+  defp finding_projection(%{"transition_id" => reviewer_transition_id, "findings" => findings})
+       when is_binary(reviewer_transition_id) and is_list(findings) do
+    Enum.with_index(findings)
+    |> Enum.map(fn {finding, index} ->
+      %{
+        "finding_ref" => finding_reference(reviewer_transition_id, index),
+        "index" => index,
+        "finding" => finding
+      }
+    end)
+  end
+
+  defp finding_projection(_reviewer), do: []
+
+  defp finding_reference(reviewer_transition_id, index),
+    do: "#{reviewer_transition_id}:finding:#{index}"
 end

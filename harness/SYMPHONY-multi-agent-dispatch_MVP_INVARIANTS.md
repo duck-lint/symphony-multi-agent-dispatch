@@ -103,6 +103,7 @@ findings
 human_question
 terminal_reason
 reconciliation (returning PM only)
+revision_reconciliation (revised Planner only)
 escalation_basis (PM await_human only)
 ```
 
@@ -185,6 +186,13 @@ cite every projected event without duplicates, fabricated IDs, omissions, or unr
 the original reports and validates provenance, but does not determine whether the PM's assessment is semantically
 correct.
 
+A Planner dispatched after a Reviewer `revise` result must include a `revision_reconciliation` object with the exact
+rejected Planner and triggering Reviewer transition IDs and one response for every deterministic Reviewer finding
+reference. Each response contains a non-empty assessment and, for `plan_ready`, an exact excerpt from the resulting
+plan text; `await_human` and `non_converged` responses account for the findings without claiming an executable
+correction. The host validates pair identity, finding completeness, and excerpt provenance, but the Reviewer alone
+judges whether the correction is semantically adequate.
+
 Every PM `await_human` result must include an `escalation_basis` object with exactly
 `required_external_action`, `existing_authority_gap`, and `supporting_transition_ids`. An initial PM may use an
 empty supporting-ID list because no specialist evidence exists. A returning PM must cite one or more accepted
@@ -241,11 +249,11 @@ Blocking findings from the immediately preceding Adversary result structurally f
 The host validates role, schema, outcome, budget, convergence preconditions, and expected current GitHub state before changing lifecycle state.
 
 History-dependent reconciliation and escalation checks run against the authoritative ledger fetched at commit time
-and before idempotency or persistence. A correctable PM contract error returns to the same PM thread with an
-actionable diagnostic for a bounded correction opportunity; it does not append an event, consume a lifecycle budget,
-or create another specialist round. Repeated PM contract failure reaches a visible bounded block rather than an
-unbounded retry loop. Persistence, history-integrity, label, and projection failures retain separate blocking
-behavior.
+and before idempotency or persistence. A correctable PM contract error returns to the same PM thread, and a
+correctable Planner revision-contract error reruns a fresh Planner, each with an actionable diagnostic for a bounded
+correction opportunity. Neither path appends an event, consumes a lifecycle budget, or creates another specialist
+round. Repeated contract failure reaches a visible bounded block rather than an unbounded retry loop. Persistence,
+history-integrity, label, and projection failures retain separate blocking behavior.
 
 When a prerequisite correction is active, a fresh Planner must return a structured resolution report. A
 `plan_ready` result with an unresolved report is invalid. A specific external prerequisite may use

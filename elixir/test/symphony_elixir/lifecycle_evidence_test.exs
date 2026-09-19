@@ -46,7 +46,71 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
     assert {:ok, history} = LifecycleHistory.project([LifecycleHistory.start_event("initial")])
     refute LifecycleEvidence.returning_pm?(history)
     assert LifecycleEvidence.project(history) == nil
+    assert LifecycleEvidence.revision_projection(history) == nil
     assert LifecycleEvidence.project(:not_a_history) == nil
+  end
+
+  test "revision projection selects the exact rejected plan and triggering review" do
+    lifecycle_id = "life-revision"
+    reviewer = revision_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, 1)
+    planner = revision_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)
+    planner = Map.merge(planner, %{"summary" => "Original plan", "evidence" => ["plan evidence"]})
+    reviewer =
+      Map.merge(reviewer, %{
+        "summary" => "Require the exact command and independent console verification.",
+        "evidence" => ["review evidence"],
+        "findings" => [
+          %{"severity" => "blocking", "summary" => "Exact command is missing.", "evidence" => ["task contract"]},
+          %{"severity" => "advisory", "summary" => "Independent console verification is missing.", "evidence" => ["review trace"]}
+        ]
+      })
+
+    history = %{
+      active?: true,
+      current_role: :planner,
+      lifecycle_id: lifecycle_id,
+      round: 1,
+      planning_attempt: 2,
+      events: [LifecycleHistory.start_event(lifecycle_id), planner, reviewer]
+    }
+
+    projection = LifecycleEvidence.revision_projection(history)
+
+    assert projection.lifecycle_id == lifecycle_id
+    assert projection.round == 1
+    assert projection.planning_attempt == 1
+    assert projection.rejected_planner["transition_id"] == planner["transition_id"]
+    assert projection.rejected_planner["summary"] == "Original plan"
+    assert projection.rejected_planner["evidence"] == ["plan evidence"]
+    assert projection.reviewer["transition_id"] == reviewer["transition_id"]
+    assert projection.reviewer["summary"] == reviewer["summary"]
+    assert projection.reviewer["evidence"] == ["review evidence"]
+    assert Enum.map(projection.reviewer_findings, & &1["index"]) == [0, 1]
+    assert Enum.map(projection.reviewer_findings, & &1["finding"]) == reviewer["findings"]
+    assert Enum.map(projection.reviewer_findings, & &1["finding_ref"]) == [
+             "#{reviewer["transition_id"]}:finding:0",
+             "#{reviewer["transition_id"]}:finding:1"
+           ]
+  end
+
+  test "revision projection rejects cross-round, cross-attempt, and cross-lifecycle pairs" do
+    base = revision_event("life-current", "PLANNER", "plan_ready", "REVIEWER", 1, 1)
+    reviewer = revision_event("life-current", "REVIEWER", "revise", "PLANNER", 1, 1)
+
+    history = fn events ->
+      %{
+        active?: true,
+        current_role: :planner,
+        lifecycle_id: "life-current",
+        round: 1,
+        planning_attempt: 2,
+        events: events
+      }
+    end
+
+    assert LifecycleEvidence.revision_projection(history.([base, Map.put(reviewer, "round", 2)])) == nil
+    assert LifecycleEvidence.revision_projection(history.([Map.put(base, "planning_attempt", 2), reviewer])) == nil
+    assert LifecycleEvidence.revision_projection(history.([base, Map.put(reviewer, "lifecycle_id", "other-life")])) == nil
   end
 
   test "round projection preserves only matching lifecycle specialist events" do
@@ -120,5 +184,33 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
         }
       ]
     })
+  end
+
+  defp revision_event(lifecycle_id, role, outcome, to_role, round, planning_attempt) do
+    %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "transition",
+      "lifecycle_id" => lifecycle_id,
+      "role_result_schema" => "symphony.role-result/v1",
+      "transition_id" =>
+        LifecycleHistory.transition_id(
+          lifecycle_id,
+          round,
+          planning_attempt,
+          String.downcase(role) |> String.to_atom(),
+          outcome
+        ),
+      "role" => role,
+      "from_role" => role,
+      "outcome" => outcome,
+      "to_role" => to_role,
+      "round" => round,
+      "planning_attempt" => planning_attempt,
+      "summary" => "bounded result",
+      "evidence" => ["evidence"],
+      "findings" => [],
+      "human_question" => nil,
+      "terminal_reason" => nil
+    }
   end
 end
