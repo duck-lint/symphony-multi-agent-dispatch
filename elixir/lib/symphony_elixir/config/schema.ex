@@ -122,6 +122,131 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule EnvironmentCapability do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:id, :string)
+      field(:command, :map)
+      field(:resources, {:array, :string}, default: [])
+      field(:working_directory, :string, default: ".")
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:id, :command, :resources, :working_directory], empty_values: [])
+      |> validate_required([:id])
+      |> validate_change(:id, &validate_identifier/2)
+      |> validate_change(:working_directory, &validate_workspace_relative_path/2)
+      |> validate_change(:resources, &validate_resource_paths/2)
+      |> validate_change(:command, &validate_command/2)
+      |> validate_has_check()
+    end
+
+    defp validate_identifier(:id, id) do
+      if Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9._:-]*\z/, id) do
+        []
+      else
+        [id: "must start with a letter or digit and contain only letters, digits, '.', '_', ':', or '-'"]
+      end
+    end
+
+    defp validate_workspace_relative_path(:working_directory, path) do
+      if workspace_relative_path?(path, allow_current_directory: true) do
+        []
+      else
+        [working_directory: "must be a non-empty workspace-relative path without '..', '\\\\', or NUL"]
+      end
+    end
+
+    defp validate_resource_paths(:resources, resources) do
+      if Enum.all?(resources, &workspace_relative_path?(&1, allow_current_directory: false)) do
+        []
+      else
+        [resources: "must contain only workspace-relative paths without '..', '\\\\', or NUL"]
+      end
+    end
+
+    defp validate_command(:command, command) when is_map(command) do
+      allowed_keys = ["executable", "args"]
+      executable = Map.get(command, "executable")
+      args = Map.get(command, "args", [])
+
+      cond do
+        Map.keys(command) -- allowed_keys != [] ->
+          [command: "may contain only executable and args"]
+
+        not is_binary(executable) or not executable_path?(executable) ->
+          [command: "executable must be a non-empty relative path or executable name"]
+
+        not is_list(args) or not Enum.all?(args, &is_binary/1) ->
+          [command: "args must be a list of strings"]
+
+        Enum.any?(args, &String.contains?(&1, <<0>>)) ->
+          [command: "args must not contain NUL"]
+
+        true ->
+          []
+      end
+    end
+
+    defp validate_has_check(changeset) do
+      if get_field(changeset, :command) || get_field(changeset, :resources) != [] do
+        changeset
+      else
+        add_error(changeset, :id, "must declare a command or at least one resource")
+      end
+    end
+
+    defp executable_path?(path) when is_binary(path) do
+      path != "" and not String.contains?(path, <<0>>) and
+        not String.contains?(path, "\\") and
+        Path.type(path) != :absolute and
+        not Enum.any?(String.split(path, "/"), &(&1 == ".."))
+    end
+
+    defp workspace_relative_path?(path, opts) when is_binary(path) do
+      ((Keyword.get(opts, :allow_current_directory, false) and path == ".") or path != "") and
+        not String.contains?(path, <<0>>) and
+        not String.contains?(path, "\\") and
+        Path.type(path) != :absolute and
+        not Enum.any?(String.split(path, "/"), &(&1 in ["", ".."]))
+    end
+  end
+
+  defmodule Environment do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      embeds_many(:capabilities, EnvironmentCapability, on_replace: :delete)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [])
+      |> cast_embed(:capabilities, with: &EnvironmentCapability.changeset/2)
+      |> validate_unique_capability_ids()
+    end
+
+    defp validate_unique_capability_ids(changeset) do
+      ids = get_field(changeset, :capabilities, []) |> Enum.map(& &1.id)
+
+      if length(ids) == length(Enum.uniq(ids)) do
+        changeset
+      else
+        add_error(changeset, :capabilities, "capability identifiers must be unique")
+      end
+    end
+  end
+
   defmodule Worker do
     @moduledoc false
     use Ecto.Schema
@@ -292,6 +417,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:environment, Environment, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
@@ -386,6 +512,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
+    |> cast_embed(:environment, with: &Environment.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
@@ -630,7 +757,13 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp flatten_errors(errors, prefix) when is_list(errors) do
-    Enum.map(errors, &(prefix <> " " <> &1))
+    Enum.flat_map(errors, fn
+      message when is_binary(message) ->
+        [prefix <> " " <> message]
+
+      nested when is_map(nested) ->
+        flatten_errors(nested, prefix)
+    end)
   end
 
   defp translate_error({message, options}) do

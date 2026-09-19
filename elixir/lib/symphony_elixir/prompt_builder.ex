@@ -14,6 +14,7 @@ defmodule SymphonyElixir.PromptBuilder do
     profile = profile_for(role, Map.get(context, :role_profile) || RoleProfiles.profile!(role))
     handoff = Map.get(context, :handoff)
     runtime_authority = Map.get(context, :runtime_authority)
+    environment_capabilities = Map.get(context, :environment_capabilities)
     lifecycle_context = Map.get(context, :lifecycle_context)
     correction_feedback = Map.get(context, :correction_feedback)
 
@@ -24,6 +25,7 @@ defmodule SymphonyElixir.PromptBuilder do
     #{String.trim(profile.instructions)}
 
     #{optional_context_section("Host-enforced runtime authority", runtime_authority)}
+    #{optional_context_section("Host-verified environment capabilities (current dispatch)", environment_capabilities)}
     #{optional_context_section("Host-derived lifecycle context", lifecycle_context)}
     #{reconciliation_section(handoff)}
     #{revision_reconciliation_section(role, handoff)}

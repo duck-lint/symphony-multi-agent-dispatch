@@ -8,6 +8,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   alias SymphonyElixir.{
     Config,
+    EnvironmentCapabilities,
     Lifecycle,
     PMThreadState,
     PromptBuilder,
@@ -76,12 +77,13 @@ defmodule SymphonyElixir.AgentRunner do
           )
 
           try do
-            with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
+            with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host),
+                 {:ok, capability_report} <- EnvironmentCapabilities.verify(workspace, worker_host) do
               run_role_turn(
                 workspace,
                 issue,
                 codex_update_recipient,
-                opts,
+                Keyword.put(opts, :environment_capabilities, capability_report),
                 worker_host,
                 role,
                 role_profile,
@@ -199,7 +201,8 @@ defmodule SymphonyElixir.AgentRunner do
       handoff: Keyword.get(opts, :handoff),
       runtime_authority: RoleRuntimePolicy.snapshot(role_policy),
       lifecycle_context: Keyword.get(opts, :lifecycle_context),
-      correction_feedback: Keyword.get(opts, :correction_feedback)
+      correction_feedback: Keyword.get(opts, :correction_feedback),
+      environment_capabilities: Keyword.get(opts, :environment_capabilities)
     }
 
     prompt = PromptBuilder.build_prompt(issue, role, prompt_context)
