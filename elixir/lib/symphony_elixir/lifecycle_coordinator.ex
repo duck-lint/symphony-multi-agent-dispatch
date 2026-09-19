@@ -180,7 +180,6 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
       {:error, _reason} = error ->
         error
-      end
     end
   end
 
