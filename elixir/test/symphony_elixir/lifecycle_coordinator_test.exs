@@ -131,6 +131,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert projection.rejected_planner["evidence"] == planner_event["evidence"]
     assert projection.reviewer["transition_id"] == reviewer_event["transition_id"]
     assert projection.reviewer["findings"] == reviewer_event["findings"]
+
     assert Enum.map(projection.reviewer_findings, & &1["finding_ref"]) ==
              Enum.with_index(reviewer_event["findings"])
              |> Enum.map(fn {_finding, index} -> "#{reviewer_event["transition_id"]}:finding:#{index}" end)
@@ -139,6 +140,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
   test "revised Planner cannot commit without complete host reconciliation" do
     lifecycle_id = "planner-revision-missing"
     install_planner_revision_history(planner_revision_events(lifecycle_id))
+
     assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
              LifecycleCoordinator.prepare_dispatch(github_issue())
 
@@ -158,6 +160,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
   test "revised Planner rejects stale, duplicate, fabricated, and invalid excerpt references" do
     lifecycle_id = "planner-revision-invalid"
     install_planner_revision_history(planner_revision_events(lifecycle_id))
+
     assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
              LifecycleCoordinator.prepare_dispatch(github_issue())
 
@@ -165,18 +168,24 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     refs = Enum.map(projection.reviewer_findings, & &1["finding_ref"])
 
     invalid_results = [
-      put_in(valid, ["revision_reconciliation", "finding_responses"],
+      put_in(
+        valid,
+        ["revision_reconciliation", "finding_responses"],
         List.replace_at(valid["revision_reconciliation"]["finding_responses"], 1, %{
           "finding_ref" => List.first(refs),
           "assessment" => "duplicate",
           "plan_excerpt" => "Verify independently."
-        })),
-      put_in(valid, ["revision_reconciliation", "finding_responses"],
+        })
+      ),
+      put_in(
+        valid,
+        ["revision_reconciliation", "finding_responses"],
         List.replace_at(valid["revision_reconciliation"]["finding_responses"], 0, %{
           "finding_ref" => "other-review:finding:0",
           "assessment" => "fabricated",
           "plan_excerpt" => "Install exact command."
-        })),
+        })
+      ),
       put_in(valid, ["revision_reconciliation", "reviewer_transition_id"], "stale-reviewer"),
       put_in(valid, ["revision_reconciliation", "finding_responses", Access.at(0), "plan_excerpt"], "not in plan")
     ]
@@ -193,6 +202,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
   test "complete Planner reconciliation persists, replays, and reaches Reviewer without semantic approval" do
     lifecycle_id = "planner-revision-valid"
     install_planner_revision_history(planner_revision_events(lifecycle_id))
+
     assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
              LifecycleCoordinator.prepare_dispatch(github_issue())
 
@@ -216,6 +226,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
   test "Planner await_human revision accounting does not bypass prerequisite authority" do
     lifecycle_id = "planner-revision-await"
     install_planner_revision_history(planner_revision_events(lifecycle_id))
+
     assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
              LifecycleCoordinator.prepare_dispatch(github_issue())
 
@@ -238,6 +249,7 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
   test "Planner non_converged revision accounting still requires complete prerequisite investigation" do
     lifecycle_id = "planner-revision-non-converged"
     install_planner_revision_history(planner_revision_events(lifecycle_id))
+
     assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
              LifecycleCoordinator.prepare_dispatch(github_issue())
 

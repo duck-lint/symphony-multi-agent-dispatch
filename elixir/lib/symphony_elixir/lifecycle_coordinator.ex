@@ -260,11 +260,11 @@ defmodule SymphonyElixir.LifecycleCoordinator do
            "summary" => event["summary"],
            "evidence" => event["evidence"],
            "findings" => event["findings"],
-          "human_question" => event["human_question"],
-          "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
-          "reconciliation" => Map.get(event, "reconciliation"),
-          "revision_reconciliation" => Map.get(event, "revision_reconciliation"),
-          "escalation_basis" => Map.get(event, "escalation_basis")
+           "human_question" => event["human_question"],
+           "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
+           "reconciliation" => Map.get(event, "reconciliation"),
+           "revision_reconciliation" => Map.get(event, "revision_reconciliation"),
+           "escalation_basis" => Map.get(event, "escalation_basis")
          }
        }}
     end

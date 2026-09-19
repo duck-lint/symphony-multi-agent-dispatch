@@ -55,6 +55,7 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
     reviewer = revision_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, 1)
     planner = revision_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)
     planner = Map.merge(planner, %{"summary" => "Original plan", "evidence" => ["plan evidence"]})
+
     reviewer =
       Map.merge(reviewer, %{
         "summary" => "Require the exact command and independent console verification.",
@@ -87,6 +88,7 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
     assert projection.reviewer["evidence"] == ["review evidence"]
     assert Enum.map(projection.reviewer_findings, & &1["index"]) == [0, 1]
     assert Enum.map(projection.reviewer_findings, & &1["finding"]) == reviewer["findings"]
+
     assert Enum.map(projection.reviewer_findings, & &1["finding_ref"]) == [
              "#{reviewer["transition_id"]}:finding:0",
              "#{reviewer["transition_id"]}:finding:1"

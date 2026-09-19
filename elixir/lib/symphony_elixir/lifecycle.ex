@@ -664,8 +664,12 @@ defmodule SymphonyElixir.Lifecycle do
     missing = @revision_reconciliation_keys -- Map.keys(reconciliation)
 
     cond do
-      unknown != [] -> {:error, {:unknown_revision_reconciliation_fields, unknown}}
-      missing != [] -> {:error, {:missing_revision_reconciliation_fields, missing}}
+      unknown != [] ->
+        {:error, {:unknown_revision_reconciliation_fields, unknown}}
+
+      missing != [] ->
+        {:error, {:missing_revision_reconciliation_fields, missing}}
+
       true ->
         with :ok <- validate_revision_string(reconciliation["rejected_planner_transition_id"], :rejected_planner_transition_id),
              :ok <- validate_revision_string(reconciliation["reviewer_transition_id"], :reviewer_transition_id),
@@ -698,8 +702,12 @@ defmodule SymphonyElixir.Lifecycle do
     missing = @revision_finding_response_keys -- Map.keys(response)
 
     cond do
-      unknown != [] -> {:error, {:unknown_revision_finding_response_fields, unknown}}
-      missing != [] -> {:error, {:missing_revision_finding_response_fields, missing}}
+      unknown != [] ->
+        {:error, {:unknown_revision_finding_response_fields, unknown}}
+
+      missing != [] ->
+        {:error, {:missing_revision_finding_response_fields, missing}}
+
       true ->
         with :ok <- validate_revision_string(response["finding_ref"], :finding_ref),
              :ok <- validate_revision_string(response["assessment"], :assessment),

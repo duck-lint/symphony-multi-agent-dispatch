@@ -219,6 +219,7 @@ defmodule SymphonyElixir.RoleKernelTest do
 
   test "Planner revision reconciliation is structural and outcome-sensitive" do
     base = valid_result("PLANNER", "plan_ready")
+
     reconciliation = %{
       "rejected_planner_transition_id" => "life:r1:p1:PLANNER:plan_ready",
       "reviewer_transition_id" => "life:r1:p1:REVIEWER:revise",
@@ -245,6 +246,7 @@ defmodule SymphonyElixir.RoleKernelTest do
       |> Map.put("revision_reconciliation", put_in(reconciliation, ["finding_responses", Access.at(0), "plan_excerpt"], nil))
 
     assert {:ok, _} = Lifecycle.validate_result(non_converged)
+
     assert {:error, {:revision_reconciliation_not_allowed_for_role, :reviewer}} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "revise"), "revision_reconciliation", reconciliation))
   end
