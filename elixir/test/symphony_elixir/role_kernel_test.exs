@@ -311,6 +311,22 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert {:error, {:missing_revision_finding_response_fields, _}} =
              Lifecycle.validate_result(Map.put(base, "revision_reconciliation", malformed_response))
 
+    malformed_response =
+      put_in(reconciliation, ["finding_responses", Access.at(0)], %{
+        "finding_ref" => 123,
+        "assessment" => "The finding identifies a genuine defect.",
+        "plan_excerpt" => "bounded result"
+      })
+
+    assert {:error, {:invalid_revision_reconciliation, {:invalid_field, :finding_ref}}} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", malformed_response))
+
+    plan_without_excerpt =
+      put_in(reconciliation, ["finding_responses", Access.at(0), "plan_excerpt"], nil)
+
+    assert {:error, {:invalid_revision_reconciliation, {:invalid_field, :plan_excerpt}}} =
+             Lifecycle.validate_result(Map.put(base, "revision_reconciliation", plan_without_excerpt))
+
     await_human =
       valid_result("PLANNER", "await_human")
       |> Map.put("human_question", "Authorize the missing external capability.")

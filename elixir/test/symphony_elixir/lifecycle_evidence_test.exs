@@ -132,6 +132,21 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
     assert LifecycleEvidence.revision_projection(history).reviewer_findings == []
   end
 
+  test "revision projection requires a complete preceding Planner and Reviewer pair" do
+    planner = revision_event("life-incomplete", "PLANNER", "plan_ready", "REVIEWER", 1, 1)
+
+    history = %{
+      active?: true,
+      current_role: :planner,
+      lifecycle_id: "life-incomplete",
+      round: 1,
+      planning_attempt: 2,
+      events: [planner]
+    }
+
+    assert LifecycleEvidence.revision_projection(history) == nil
+  end
+
   test "round projection preserves only matching lifecycle specialist events" do
     history = %{
       lifecycle_id: "life-current",
