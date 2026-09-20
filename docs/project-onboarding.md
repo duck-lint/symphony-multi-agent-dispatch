@@ -1,100 +1,84 @@
-# Project Onboarding
+# Project onboarding
 
-This document describes how to attach a fresh GitHub project repository to
-SYMPHONY, from a repository with no SYMPHONY configuration through the first
-eligible issue being observed by the polling runtime.
+This guide attaches one GitHub repository to one project-scoped SYMPHONY
+runtime. The example repository throughout is `example/project`; replace it
+with the target project without changing the shared lifecycle or role
+authority.
 
-Project onboarding configures one project-scoped runtime instance. It does not
-define or customize the shared SYMPHONY lifecycle.
-
-## End state
-
-A project is onboarded when:
-
-1. the repository contains project authority appropriate for coding agents;
-2. `.symphony/instance_config.yml` binds the repository to one SYMPHONY runtime;
-3. host credentials authorize the required bounded GitHub operations;
-4. SYMPHONY has reconciled its managed GitHub label namespace;
-5. project workspace materialization has been validated;
-6. the runtime is polling successfully;
-7. an open issue carrying `symphony:auto` is recognized as eligible and begins
-   the host-owned lifecycle at PM without manual lifecycle routing.
-
-No human should manually create or maintain SYMPHONY role/state labels.
-
----
+The host must not be asked to route normal role transitions. After initial
+opt-in, the host validates structured role results and owns the lifecycle.
 
 ## 1. Project authority
 
-Before SYMPHONY is configured, the target repository should contain the project
-semantics an agent needs to work correctly.
+Prepare the target repository with its own `AGENTS.md`, specifications,
+harness material, source, tests, and fixture contracts. Those files define
+project meaning and acceptance evidence. They do not redefine SYMPHONY's role
+topology, lifecycle budgets, PM continuity, or host mutation authority.
 
-Typical sources include:
+## 2. Host-loaded configuration authority
 
-- `AGENTS.md`;
-- project specifications or harness documentation;
-- source code;
-- tests;
-- fixture contracts;
-- implementation plans.
-
-These artifacts define the project.
-
-They MUST NOT redefine SYMPHONY lifecycle topology, role semantics, lifecycle
-budgets, PM persistence, or host authority.
-
-SYMPHONY owns those mechanics.
-
----
-
-## 2. Host prerequisites
-
-The operator host must have:
-
-- the accepted SYMPHONY runtime installed;
-- Codex installed and authenticated;
-- the required runtime model configuration available;
-- a GitHub credential available outside the target repository;
-- permission for that credential to access the target repository and perform
-  the bounded issue/comment/label operations required by SYMPHONY.
-
-Example host secret:
-
-`~/.config/symphony/credentials.env`
+The runtime loads exactly one YAML instance configuration file. The CLI accepts
+an explicit path:
 
 ```bash
-SYMPHONY_GITHUB_TOKEN=...
+symphony \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  --logs-root "$HOME/.local/state/symphony/example-project" \
+  /srv/projects/example-project/.symphony/instance_config.yml
 ```
 
-Secrets MUST NOT be committed to the project repository.
+Without the final argument, the CLI uses `.symphony/instance_config.yml`
+relative to its current working directory. The selected file's location—not
+the repository's default branch—determines the authoritative instance
+configuration. The runtime does not search GitHub branches for a newer copy.
 
-## 3. Add project instance configuration
+Copies of `.symphony/instance_config.yml` in a source branch or an issue
+workspace are ordinary project files. They do not redirect a running host,
+and changing one does not change the host's selected configuration file. To
+change the running instance, change the host-loaded file and let the host's
+configuration store reload it, or restart the instance with a different path.
 
-Create:
+Keep credentials and other host secrets outside the target repository.
 
-.symphony/instance_config.yml
+## 3. Host prerequisites and secrets
 
-The instance configuration describes project-specific mechanics only.
+Before launch, provide:
 
-At minimum it binds:
+- the accepted SYMPHONY executable and its declared Linux/WSL toolchain or
+  installed runtime;
+- an installed and authenticated Codex CLI whose app-server command is
+  available to the host;
+- a GitHub token with access to `example/project` and permission for the
+  bounded issue, comment, and label operations;
+- the lifecycle integrity secret; and
+- the numeric GitHub user IDs allowed to answer human escalations.
 
-GitHub repository;
-host-side credential reference;
-opt-in label;
-polling interval;
-workspace root;
-workspace materialization;
-concurrency;
-Codex command/runtime configuration.
+For example, load a mode-600 environment file in the host service or shell
+before launching SYMPHONY. Do not print or commit it:
 
-Example:
-
+```bash
+set -a
+source /etc/symphony/example-project.env
+set +a
 ```
+
+The file can contain values referenced by the instance configuration, such as
+`SYMPHONY_GITHUB_TOKEN` and `SYMPHONY_LIFECYCLE_INTEGRITY_SECRET`. Never put
+an actual secret in this document, a project workspace, a prompt, or a Git
+commit.
+
+## 4. Instance configuration
+
+Create the host-selected `.symphony/instance_config.yml` with the project
+specific tracker, workspace, hooks, capabilities, and runtime settings. This
+example is internally consistent:
+
+```yaml
 tracker:
   kind: github
   provider:
-    repo: "owner/project"
-    token: $SYMPHONY_GITHUB_TOKEN
+    repo: "example/project"
+    token: "$SYMPHONY_GITHUB_TOKEN"
   required_labels:
     - symphony:auto
   active_states:
@@ -106,12 +90,31 @@ polling:
   interval_ms: 5000
 
 workspace:
-  root: ~/code/symphony-workspaces/project
+  root: /var/lib/symphony/workspaces/example-project
+  repository: github.com/example/project
+  branch: feature/accepted-baseline
 
 hooks:
   after_create: |
     set -eu
-    git clone --depth 1 https://github.com/owner/project.git .
+    git clone --branch "feature/accepted-baseline" --single-branch \
+      https://github.com/example/project.git .
+
+environment:
+  capabilities:
+    - id: project-runtime
+      working_directory: .
+      resources:
+        - fixtures/input/example.pdf
+      command:
+        executable: .venv/bin/python
+        args: ["-c", "import project_package"]
+
+lifecycle:
+  integrity_secret: "$SYMPHONY_LIFECYCLE_INTEGRITY_SECRET"
+
+human_response:
+  authorized_user_ids: [12345678] # replace with a verified numeric GitHub user ID
 
 agent:
   max_concurrent_agents: 1
@@ -125,39 +128,131 @@ codex:
     networkAccess: false
 ```
 
-Commit and push this configuration before launching the project runtime.
+The runtime parses the YAML and resolves supported `$NAME` references from the
+host environment. `workspace.repository` and `workspace.branch` must be
+configured together; the branch must be a safe Git branch reference. A relative
+`workspace.root` is resolved relative to the directory containing the selected
+configuration file.
 
-## 4. Materialize project-local untracked dependencies
+### Lifecycle integrity
 
-If the project requires host-local data that MUST NOT be committed, the
-workspace hook is responsible for materializing it.
+`lifecycle.integrity_secret` is required for GitHub lifecycle preparation and
+commit. The host signs its append-only lifecycle events with HMAC-SHA256 and
+verifies the signed history before proceeding. Provision the environment
+variable securely before process launch, keep its value stable across restarts,
+and do not rotate it while existing signed events still need to be read. A
+successful process start is not proof that the secret is usable: configuration
+parsing and OTP startup occur first; the lifecycle coordinator enforces the
+usable secret when it prepares a GitHub dispatch.
 
-Examples include:
+### Human-response authorization
 
-licensed/local PDFs;
-private fixture data;
-generated local inputs;
-other ignored runtime assets.
+`human_response.authorized_user_ids` contains positive, unique numeric GitHub
+user IDs. Do not authorize by login name alone. For a verified login, obtain
+the ID from the authenticated GitHub API, for example:
 
-The canonical host copy should live outside the repository.
-
-after_create copies or links the required substrate into the issue workspace.
-
-before_run SHOULD validate required substrate and fail explicitly when it is
-missing.
-
-Agents should consume ordinary workspace-local paths. They should not depend
-on arbitrary visibility into the operator's home directory.
-
-## 5. Reconcile the SYMPHONY GitHub namespace
-
-Before dispatch polling becomes active, the host MUST ensure the target
-repository contains the SYMPHONY-managed labels required by the shared
-lifecycle.
-
-Managed labels:
-
+```bash
+gh api users/VERIFIED_LOGIN --jq .id
 ```
+
+The current parser accepts only `decision: "continue"`; a formal rejection
+decision is not implemented. A response comment must have this exact enclosing
+shape and all of these fields:
+
+```text
+<!-- symphony.human-response/v1
+{
+  "schema": "symphony.human-response/v1",
+  "lifecycle_id": "<current lifecycle id>",
+  "escalation_transition_id": "<current escalation transition id>",
+  "decision": "continue",
+  "guidance": "Continue with the bounded, authorized correction.",
+  "authorized_actions": []
+}
+-->
+```
+
+`lifecycle_id` and `escalation_transition_id` must bind the response to the
+current escalation. `guidance` must be non-empty. `authorized_actions` must be
+a list of strings and is empty unless the human explicitly authorizes named
+actions. The authenticated GitHub comment metadata—not prose in the body—supplies
+the author ID, comment identity, timestamps, and URL. Edited, malformed,
+unauthorized, stale, or conflicting comments do not continue the lifecycle.
+
+When the PM lacks authority for an external decision, it returns `await_human`
+with a non-empty `human_question`. The host persists that escalation and adds
+the awaiting-human projection. The PM does not call a GitHub authorization
+tool. When a valid response is accepted, the host opens a new work epoch in
+the same lifecycle, retaining the PM thread and issue workspace, resetting the
+epoch-local working-round budget, and preserving monotonic global rounds.
+
+## 5. Branch-scoped workspace materialization and verification
+
+For a new issue workspace, the host creates the issue-specific directory and
+runs `hooks.after_create` once. In the example, the hook materializes the
+configured branch. The hook is preparation, not provenance evidence.
+
+Before every role dispatch, the host independently verifies the materialized
+workspace's:
+
+- `origin` repository identity against `workspace.repository`;
+- symbolic checked-out branch against `workspace.branch`;
+- checked-out `HEAD`; and
+- `refs/remotes/origin/<branch>` revision, requiring it to equal `HEAD`.
+
+The host passes the resulting source-provenance report to the role only after
+these checks succeed. A missing repository, unsafe or mismatched branch,
+unreadable Git state, repository mismatch, or revision mismatch fails closed.
+
+Existing issue workspaces are preserved in place. SYMPHONY does not
+automatically reset, rebase, reclone, or otherwise reconcile a reused
+workspace. If a changed `workspace.repository` or `workspace.branch`
+declaration conflicts with an existing workspace, dispatch is rejected; the
+configuration change does not redirect that workspace.
+
+Only the Implementer receives bounded project-workspace write authority. Git
+metadata is protected by the runtime, and the Implementer cannot stage, commit,
+switch branches, reset, merge, push, or publish.
+
+## 6. Environment capabilities
+
+`environment.capabilities` is a declarative contract for checks the host can
+report at a role-dispatch boundary. Each capability has a stable `id` and at
+least one of:
+
+- `resources`: workspace-relative paths;
+- `working_directory`: an optional workspace-relative directory, default `.`;
+- `command`: an optional direct executable plus argv-style string `args`.
+
+Resource paths and relative executables cannot be absolute or escape the
+workspace. A relative executable is resolved from the workspace root; a bare
+executable name is resolved through the host `PATH`. The host executes the
+declared command directly; it does not parse arbitrary shell text into
+capability evidence.
+
+Use `after_create` to provision substrate needed to materialize a new
+workspace, such as cloning the source or copying permitted host-local fixture
+data. Use `before_run` when a per-attempt setup or dynamic check cannot be
+expressed as a workspace-local resource or direct command. `before_run` runs
+before source and capability verification and its success is not itself a
+capability report. Redundant shell checks in `before_run` are therefore not
+the preferred way to report ordinary capabilities.
+
+After `before_run` succeeds, the host verifies every declared capability in the
+current workspace for that dispatch. Any missing resource, unavailable
+executable, non-zero command, timeout, or unsafe declaration fails closed. With
+no declarations, the dispatch receives an explicit `not_checked` report. A
+`verified` report means only that the declared checks passed at its verification
+time; it is ephemeral evidence, not a permanent workspace guarantee and not a
+grant of role authority.
+
+## 7. GitHub label namespace and first issue
+
+The current runtime does **not** reconcile a repository-wide SYMPHONY label
+namespace at startup. Provision these labels in the target repository through
+GitHub before opt-in:
+
+```text
 symphony:auto
 symphony:role:pm
 symphony:role:planner
@@ -171,220 +266,62 @@ symphony:state:lifecycle-complete
 symphony:state:non-converged
 ```
 
-Provisioning MUST be idempotent.
+The host only performs bounded add/remove operations for labels on the current
+issue and verifies its lifecycle projection. It does not create the complete
+namespace, set label descriptions or colors, or repair unrelated repository
+labels.
 
-Existing correct labels are left intact.
+For a new open issue, add both `symphony:auto` and
+`symphony:role:pm`. The current no-history initialization path requires the PM
+role label; an auto-only issue is not converted into PM by a separate startup
+preflight. Once those labels are present, the host creates the lifecycle-start
+comment, preserves it as durable history, and then owns all subsequent role
+and state-label transitions.
 
-A missing label is created by the host.
+## 8. Actual operational sequence
 
-Failure to read or provision the required namespace is an onboarding/startup
-failure and MUST be surfaced explicitly.
+Use this order:
 
-```bash
-set -a
-source ~/.config/symphony/credentials.env
-set +a
+1. **Project authority:** prepare the target repository's authority files,
+   source, tests, and required branch content.
+2. **Host prerequisites and secrets:** install/authenticate Codex, make the
+   GitHub credential and integrity secret available to the host, and verify the
+   authorized numeric GitHub user IDs.
+3. **Instance configuration:** create the selected YAML file and ensure it
+   parses with the required tracker, workspace, lifecycle, human-response, and
+   runtime settings.
+4. **Workspace materialization:** confirm that the `after_create` clone or
+   other provisioning hook can create a new issue workspace for the configured
+   branch. It runs only for a new workspace.
+5. **Label namespace:** provision the labels above manually; the runtime does
+   not reconcile them.
+6. **Verification:** distinguish operator checks from runtime checks. The
+   runtime parses and validates configuration during startup and poll cycles;
+   lifecycle preparation checks the integrity secret and signed GitHub history;
+   each role dispatch runs `before_run`, source-provenance verification, and
+   environment-capability verification. There is no startup preflight that
+   guarantees the latter checks.
+7. **Runtime launch:** start the selected executable with the required
+   acknowledgement flag and explicit configuration path. Startup checks the
+   file path, loads the configuration, and starts polling; it does not dispatch
+   a role by itself.
+8. **Issue opt-in:** on an active open issue, apply `symphony:auto` and
+   `symphony:role:pm`.
+9. **Lifecycle operation:** polling refreshes the issue, and lifecycle
+   preparation fetches/verifies comments and initializes the PM lifecycle when
+   no lifecycle exists. The host then dispatches PM, Planner, Reviewer,
+   Implementer, Adversary, returning PM, and—after valid convergence—Archivist
+   according to the committed transition rules.
+10. **Awaiting-human continuation:** if PM returns `await_human`, wait for one
+    authenticated, correctly bound response comment. Do not route the next role
+    manually. A valid response resumes the same PM thread and workspace in the
+    next epoch.
+11. **Terminal behavior:** Archivist completion removes `symphony:auto` and
+    role labels, adds `symphony:state:lifecycle-complete`, and leaves the issue
+    open. Budget exhaustion uses `symphony:state:non-converged`; technical or
+    continuity failures use the blocked projection. Terminal issues remain
+    non-dispatchable, and the workspace remains available for later
+    human-authorized disposition or publication.
 
-python3 - <<'PY'
-import json
-import os
-import urllib.request
-import urllib.error
-
-repo = "<<<your_project_repo_here>>>"
-token = os.environ["SYMPHONY_GITHUB_TOKEN"]
-
-labels = [
-    ("symphony:auto", "Eligible for SYMPHONY autonomous lifecycle", "5319e7"),
-    ("symphony:role:pm", "Current SYMPHONY role: PM", "8250df"),
-    ("symphony:role:planner", "Current SYMPHONY role: Planner", "8250df"),
-    ("symphony:role:reviewer", "Current SYMPHONY role: Reviewer", "8250df"),
-    ("symphony:role:implementer", "Current SYMPHONY role: Implementer", "8250df"),
-    ("symphony:role:adversary", "Current SYMPHONY role: Adversary", "8250df"),
-    ("symphony:role:archivist", "Current SYMPHONY role: Archivist", "8250df"),
-    ("symphony:state:awaiting-human", "SYMPHONY requires human input", "fbca04"),
-    ("symphony:state:blocked", "SYMPHONY lifecycle blocked", "d73a4a"),
-    ("symphony:state:lifecycle-complete", "SYMPHONY lifecycle completed", "0e8a16"),
-    ("symphony:state:non-converged", "SYMPHONY lifecycle exhausted without convergence", "b60205"),
-]
-
-url = f"https://api.github.com/repos/{repo}/labels"
-
-for name, description, color in labels:
-    body = json.dumps({
-        "name": name,
-        "description": description,
-        "color": color,
-    }).encode()
-
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req) as response:
-            print(f"created: {name}")
-    except urllib.error.HTTPError as e:
-        if e.code == 422:
-            print(f"already exists: {name}")
-        else:
-            print(f"FAILED {name}: HTTP {e.code} {e.read().decode()}")
-PY
-```
-
-## 6. Validate before polling
-
-Project startup SHOULD fail before dispatch if any required onboarding
-condition is not satisfied.
-
-Validate at minimum:
-
-instance configuration parses;
-target repository is reachable;
-GitHub credential is accepted;
-required label namespace exists;
-workspace root is usable;
-Codex executable is available;
-required model configuration is present;
-project workspace creation/materialization succeeds or can succeed;
-required host-local substrate checks are valid.
-
-Validation must not dispatch a coding role.
-
-## 7. Start the project runtime
-
-Load host credentials:
-
-```
-set -a
-source ~/.config/symphony/credentials.env
-set +a
-```
-
-Then launch the project instance:
-
-```
-symphony \
-  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
-  --logs-root "$HOME/.local/state/symphony/<project>-live" \
-  --port <project-port> \
-  /path/to/project/.symphony/instance_config.yml
-```
-
-A successful idle startup means:
-
-configuration valid
-→ GitHub reachable
-→ managed labels reconciled
-→ polling active
-→ zero eligible issues
-→ zero Codex executions
-
-Idle polling is the expected state before an issue is opted in.
-
-## 8. Opt in the first issue
-
-Create an ordinary GitHub issue describing real project work.
-
-The human applies only:
-
-`symphony:auto`
-
-The human does NOT select a role.
-
-For a newly opted-in issue with:
-
-no existing SYMPHONY lifecycle history;
-no terminal SYMPHONY state;
-no conflicting managed role projection;
-
-the host deterministically initializes the shared lifecycle:
-
-```
-symphony:auto
-      ↓
-host recognizes new lifecycle
-      ↓
-projects symphony:role:pm
-      ↓
-dispatches PM
-```
-
-From that point onward, all role/state transitions are host-owned.
-
-The human is not the lifecycle transition function.
-
-## 9. Normal polling behavior
-
-Once initialized:
-
-```
-GitHub issue
-    ↓
-poll
-    ↓
-validate current lifecycle projection/history
-    ↓
-dispatch exactly one legal current role
-    ↓
-validate role result
-    ↓
-persist handoff/comment
-    ↓
-project next role/state
-    ↓
-next poll
-```
-
-The project repository does not route itself.
-
-Agents do not mutate GitHub.
-
-The host owns GitHub lifecycle projection.
-
-## 10. Successful terminal behavior
-
-Successful lifecycle termination leaves the project issue open and projects:
-
-symphony:state:lifecycle-complete
-
-The host removes:
-
-symphony:auto;
-the current role label.
-
-Later polling of a correct terminal projection is read-only and produces no
-additional GitHub mutation.
-
-Publication, commit, PR creation, merge, and issue closure remain separate from
-lifecycle completion.
-
-Onboarding invariant
-
-From a fresh project repository to autonomous polling, the human should be
-responsible only for:
-
-supplying project authority;
-supplying project-specific runtime mechanics;
-granting the host credential access to the repository;
-starting the project runtime;
-opting real work in with symphony:auto.
-
-Everything else required by the shared SYMPHONY lifecycle is SYMPHONY's job.
-
-
-And the important realization is that this document would expose **two small missing onboarding capabilities in the runtime**, not just missing documentation:
-
-```text
-repo label provisioning
-+
-new opted-in issue → deterministic PM initialization
-```
+The host performs no automatic commit, push, pull request, merge, publication,
+or issue closure.
