@@ -15,6 +15,7 @@ defmodule SymphonyElixir.PromptBuilder do
     handoff = Map.get(context, :handoff)
     runtime_authority = Map.get(context, :runtime_authority)
     environment_capabilities = Map.get(context, :environment_capabilities)
+    source_provenance = Map.get(context, :source_provenance)
     lifecycle_context = Map.get(context, :lifecycle_context)
     correction_feedback = Map.get(context, :correction_feedback)
 
@@ -26,7 +27,9 @@ defmodule SymphonyElixir.PromptBuilder do
 
     #{optional_context_section("Host-enforced runtime authority", runtime_authority)}
     #{optional_context_section("Host-verified environment capabilities (current dispatch)", environment_capabilities)}
+    #{optional_context_section("Host-verified source branch provenance (current workspace)", source_provenance)}
     #{optional_context_section("Host-derived lifecycle context", lifecycle_context)}
+    #{human_guidance_section(role, lifecycle_context)}
     #{reconciliation_section(handoff)}
     #{revision_reconciliation_section(role, handoff)}
     #{optional_context_section("Host correction diagnostic (the prior result was not committed; correct the result contract only)", correction_feedback)}
@@ -62,6 +65,21 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp optional_context_section(label, context),
     do: "\n#{label}:\n#{format_context(context)}\n"
+
+  defp human_guidance_section(:pm, %{human_guidance: guidance}) when is_map(guidance) do
+    """
+
+    Host-accepted human guidance (authoritative input for this resumed PM epoch; not a role result or permission grant):
+    #{format_context(guidance)}
+
+    The host requires a "human_guidance_acknowledgment" object in this PM result with exactly
+    "response_transition_id" copied from the guidance and a concise "assessment" explaining
+    how the guidance is being applied or why it does not authorize a proposed action. An empty
+    "authorized_actions" list grants no action authority.
+    """
+  end
+
+  defp human_guidance_section(_role, _lifecycle_context), do: ""
 
   defp reconciliation_section(handoff) do
     case handoff_reconciliation(handoff) do

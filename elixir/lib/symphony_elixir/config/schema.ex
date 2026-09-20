@@ -113,12 +113,108 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     embedded_schema do
       field(:root, :string, default: Path.join(System.tmp_dir!(), "symphony_workspaces"))
+      field(:repository, :string)
+      field(:branch, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:root], empty_values: [])
+      |> cast(attrs, [:root, :repository, :branch], empty_values: [])
+      |> validate_source_repository()
+      |> validate_source_branch()
+    end
+
+    defp validate_source_repository(changeset) do
+      repository = get_field(changeset, :repository)
+      branch = get_field(changeset, :branch)
+
+      cond do
+        is_nil(repository) and is_nil(branch) ->
+          changeset
+
+        not is_binary(repository) or String.trim(repository) == "" ->
+          add_error(changeset, :repository, "must be a non-empty repository when a source branch is configured")
+
+        String.contains?(repository, [<<0>>, "\r", "\n"]) ->
+          add_error(changeset, :repository, "must not contain NUL or line-break characters")
+
+        true ->
+          changeset
+      end
+    end
+
+    defp validate_source_branch(changeset) do
+      case get_field(changeset, :branch) do
+        nil ->
+          if is_binary(get_field(changeset, :repository)),
+            do: add_error(changeset, :branch, "must be configured together with repository"),
+            else: changeset
+
+        branch when is_binary(branch) ->
+          if valid_branch_reference?(branch) do
+            changeset
+          else
+            add_error(changeset, :branch, "must be a non-empty safe Git branch reference")
+          end
+      end
+    end
+
+    defp valid_branch_reference?(branch) do
+      trimmed = String.trim(branch)
+
+      trimmed == branch and trimmed != "" and
+        not String.contains?(branch, [<<0>>, "\\", "\r", "\n", "..", "@{"]) and
+        not String.starts_with?(branch, "/") and not String.ends_with?(branch, "/") and
+        not String.starts_with?(branch, ".") and not String.ends_with?(branch, ".") and
+        not String.ends_with?(branch, ".lock") and
+        not Enum.any?(String.split(branch, "/"), &(&1 == ""))
+    end
+  end
+
+  defmodule HumanResponse do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:authorized_user_ids, {:array, :integer}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:authorized_user_ids], empty_values: [])
+      |> validate_required([:authorized_user_ids])
+      |> validate_length(:authorized_user_ids, min: 1)
+      |> validate_change(:authorized_user_ids, fn :authorized_user_ids, ids ->
+        if Enum.all?(ids, &(is_integer(&1) and &1 > 0)) and length(ids) == length(Enum.uniq(ids)) do
+          []
+        else
+          [authorized_user_ids: "must contain unique positive numeric GitHub user IDs"]
+        end
+      end)
+    end
+  end
+
+  defmodule Lifecycle do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:integrity_secret, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:integrity_secret], empty_values: [])
+      |> validate_change(:integrity_secret, fn :integrity_secret, value ->
+        if is_binary(value) and String.trim(value) != "", do: [], else: [integrity_secret: "must be a non-empty secret"]
+      end)
     end
   end
 
@@ -417,6 +513,8 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:human_response, HumanResponse, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:lifecycle, Lifecycle, on_replace: :update, defaults_to_struct: true)
     embeds_one(:environment, Environment, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
@@ -512,6 +610,8 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
+    |> cast_embed(:human_response, with: &HumanResponse.changeset/2)
+    |> cast_embed(:lifecycle, with: &Lifecycle.changeset/2)
     |> cast_embed(:environment, with: &Environment.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
@@ -580,13 +680,18 @@ defmodule SymphonyElixir.Config.Schema do
       | root: resolve_path_value(settings.workspace.root, Path.join(System.tmp_dir!(), "symphony_workspaces"))
     }
 
+    lifecycle = %{
+      settings.lifecycle
+      | integrity_secret: resolve_secret_setting(settings.lifecycle.integrity_secret, nil)
+    }
+
     codex = %{
       settings.codex
       | approval_policy: normalize_keys(settings.codex.approval_policy),
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    %{settings | tracker: tracker, workspace: workspace, lifecycle: lifecycle, codex: codex}
   end
 
   defp normalize_keys(value) when is_map(value) do

@@ -78,6 +78,146 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  @doc """
+  Verifies the configured source branch without changing a workspace.
+
+  This is deliberately separate from `after_create`: a hook may prepare a
+  workspace, but only the observed Git repository, branch, and commit establish
+  branch provenance. Existing dirty workspaces are inspected in place and are
+  never reset or recloned.
+  """
+  @spec verify_source_provenance(Path.t(), worker_host()) :: {:ok, map()} | {:error, term()}
+  def verify_source_provenance(workspace, worker_host \\ nil) when is_binary(workspace) do
+    source = Config.settings!().workspace
+
+    case {source.repository, source.branch} do
+      {nil, nil} ->
+        {:ok, %{"status" => "not_checked", "workspace" => workspace}}
+
+      {repository, branch} when is_binary(repository) and is_binary(branch) ->
+        verify_configured_source(workspace, repository, branch, worker_host)
+
+      _ ->
+        {:error, :invalid_source_configuration}
+    end
+  end
+
+  defp verify_configured_source(workspace, repository, branch, nil) do
+    with :ok <- validate_branch_reference(branch),
+         {:ok, "true"} <- git_output(workspace, ["rev-parse", "--is-inside-work-tree"], true),
+         {:ok, origin} <- git_output(workspace, ["remote", "get-url", "origin"]),
+         {:ok, checked_out_branch} <- git_output(workspace, ["symbolic-ref", "--short", "HEAD"]),
+         {:ok, head} <- git_output(workspace, ["rev-parse", "HEAD"]),
+         {:ok, branch_commit} <- git_output(workspace, ["rev-parse", "refs/remotes/origin/#{branch}"]) do
+      verify_source_values(workspace, repository, branch, origin, checked_out_branch, head, branch_commit)
+    end
+  end
+
+  defp verify_configured_source(workspace, repository, branch, worker_host) when is_binary(worker_host) do
+    with :ok <- validate_branch_reference(branch) do
+      script =
+        [
+          "set -eu",
+          remote_shell_assign("workspace", workspace),
+          remote_shell_assign("branch", branch),
+          "test \"$(git -C \"$workspace\" rev-parse --is-inside-work-tree)\" = true",
+          "origin=$(git -C \"$workspace\" remote get-url origin)",
+          "checked_out_branch=$(git -C \"$workspace\" symbolic-ref --short HEAD)",
+          "head=$(git -C \"$workspace\" rev-parse HEAD)",
+          "branch_commit=$(git -C \"$workspace\" rev-parse \"refs/remotes/origin/$branch\")",
+          "printf '%s\\t%s\\t%s\\t%s\\n' \"$origin\" \"$checked_out_branch\" \"$head\" \"$branch_commit\""
+        ]
+        |> Enum.join("\n")
+
+      run_remote_source_verification(worker_host, script, workspace, repository, branch)
+    end
+  end
+
+  defp run_remote_source_verification(worker_host, script, workspace, repository, branch) do
+    case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
+      {:ok, {output, 0}} -> parse_remote_source_output(output, workspace, repository, branch)
+      {:ok, {_output, status}} -> {:error, {:source_provenance_unreadable, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp parse_remote_source_output(output, workspace, repository, branch) do
+    case String.split(IO.iodata_to_binary(output), "\t", trim: true) do
+      [origin, checked_out_branch, head, branch_commit] ->
+        verify_source_values(workspace, repository, branch, origin, checked_out_branch, head, branch_commit)
+
+      _ ->
+        {:error, {:source_provenance_unreadable, :invalid_remote_git_output}}
+    end
+  end
+
+  defp verify_source_values(workspace, repository, branch, origin, checked_out_branch, head, branch_commit) do
+    cond do
+      checked_out_branch != branch ->
+        {:error, {:source_branch_mismatch, branch, checked_out_branch}}
+
+      head != branch_commit ->
+        {:error, {:source_revision_mismatch, branch_commit, head}}
+
+      not repository_matches?(repository, origin) ->
+        {:error, {:source_repository_mismatch, repository, origin}}
+
+      true ->
+        {:ok,
+         %{
+           "status" => "verified",
+           "workspace" => Path.expand(workspace),
+           "repository" => repository,
+           "origin" => origin,
+           "branch" => branch,
+           "head" => head,
+           "branch_commit" => branch_commit,
+           "verified_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+         }}
+    end
+  end
+
+  defp git_output(workspace, args, expected \\ nil) do
+    case System.cmd("git", ["-C", workspace | args], stderr_to_stdout: true) do
+      {output, 0} ->
+        value = String.trim(output)
+        if expected == true and value != "true", do: {:error, {:source_provenance_unreadable, value}}, else: {:ok, value}
+
+      {_output, status} ->
+        {:error, {:source_provenance_unreadable, status}}
+    end
+  rescue
+    _error -> {:error, {:source_provenance_unreadable, :git_unavailable}}
+  end
+
+  defp validate_branch_reference(branch) do
+    case System.cmd("git", ["check-ref-format", "--branch", branch], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {_output, status} -> {:error, {:invalid_source_branch, branch, status}}
+    end
+  rescue
+    _error -> {:error, {:invalid_source_branch, branch, :git_unavailable}}
+  end
+
+  defp repository_matches?(configured, origin) do
+    repository_identity(configured) == repository_identity(origin)
+  end
+
+  defp repository_identity(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.trim_trailing("/")
+    |> String.trim_trailing(".git")
+    |> String.replace_prefix("git@github.com:", "github.com/")
+    |> String.replace_prefix("https://", "")
+    |> String.replace_prefix("http://", "")
+    |> String.trim_trailing("/")
+    |> case do
+      "file://" <> path -> Path.expand(path)
+      path -> path
+    end
+  end
+
   defp ensure_workspace(workspace, nil) do
     cond do
       File.dir?(workspace) ->

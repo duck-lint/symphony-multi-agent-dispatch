@@ -154,6 +154,66 @@ consume a planning attempt. Historical events without this additive field remain
 
 ## Runtime configuration and provenance
 
+### Human-guided continuation and work epochs
+
+An instance may configure the numeric GitHub user IDs permitted to answer an
+`await_human` escalation. A response is accepted only from a matching
+authenticated GitHub comment author and only when its structured body names the
+current lifecycle and escalation transition:
+
+```yaml
+human_response:
+  authorized_user_ids: [12345678]
+lifecycle:
+  integrity_secret: "$SYMPHONY_LIFECYCLE_INTEGRITY_SECRET"
+```
+
+The response body is `symphony.human-response/v1` JSON inside the visible
+`<!-- symphony.human-response/v1 ... -->` marker. Its `decision` must be
+`continue`; `guidance` is preserved verbatim and `authorized_actions` is an
+explicit list that is empty unless the human authorizes a named action. The
+host obtains author ID, login, timestamps, comment ID, URL, and content digest
+from the authenticated GitHub API. Edited, malformed, unauthorized, stale, or
+conflicting comments do not advance the lifecycle.
+
+Each accepted response is one signed append-only lifecycle event. It keeps the
+same lifecycle ID, PM thread, and issue workspace, opens the next work epoch,
+and carries the prior global round history forward. Global round numbers and
+transition IDs remain monotonic; only the epoch-local working-round budget is
+reset. The resumed PM must acknowledge the accepted response by transition ID
+in its next role result. Human guidance is evidence and explicit authorization,
+not additional role authority.
+
+Host-written lifecycle events are authenticated with the instance-scoped
+`lifecycle.integrity_secret`. GitHub authorship alone is not a trust boundary
+because the host and authorized human may use the same account. The secret is
+resolved outside the target workspace and is never included in prompts or
+logs.
+
+### Branch-scoped issue workspaces
+
+New project instances can declare the source repository and branch used by
+issue workspaces. The existing `hooks.after_create` remains the preparation
+mechanism; before a specialist launches, SYMPHONY independently verifies the
+actual `origin`, symbolic branch, checked-out `HEAD`, and resolved remote branch
+commit:
+
+```yaml
+workspace:
+  root: /var/lib/symphony/workspaces
+  repository: github.com/example/project
+  branch: feature/accepted-baseline
+```
+
+The branch is passed to Git as an argument, not interpolated into a shell
+command. Missing or unsafe refs, repository/branch/revision mismatches, and
+failed Git inspection fail closed. Reused workspaces are inspected in place;
+their dirty files, current branch, and `HEAD` are not reset, rebased, or
+recloned. A changed declaration therefore rejects an existing mismatched
+workspace instead of silently redirecting it. The verification report is
+ephemeral and records the safe repository, branch, `HEAD`, resolved branch
+commit, workspace identity, and timestamp for the current dispatch.
+
 The required Codex runtime configuration is `gpt-5.6-luna` with reasoning effort `high`, supplied through
 the project instance's Codex app-server command, for example:
 

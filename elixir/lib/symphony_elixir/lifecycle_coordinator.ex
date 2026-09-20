@@ -11,9 +11,11 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   alias SymphonyElixir.{
     Config,
     GitHub.Client,
+    HumanResponse,
     Lifecycle,
     LifecycleEvidence,
     LifecycleHistory,
+    LifecycleIntegrity,
     RoleProfiles,
     RoleRouter
   }
@@ -34,7 +36,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
           | {:error, term()}
   def prepare_dispatch(%Issue{id: issue_id} = issue, _opts \\ []) when is_binary(issue_id) do
     if github_tracker?() do
-      prepare_github_dispatch_for_issue(issue_id)
+      with :ok <- require_lifecycle_integrity(), do: prepare_github_dispatch_for_issue(issue_id)
     else
       {:ok, %{issue: issue, history: nil, handoff: %{}, lifecycle_context: %{}}}
     end
@@ -45,7 +47,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   def commit_role_result(%Issue{id: issue_id}, expected_role, result, _opts \\ [])
       when is_binary(issue_id) and is_map(result) do
     if github_tracker?() do
-      commit_github_role_result(issue_id, expected_role, result)
+      with :ok <- require_lifecycle_integrity(), do: commit_github_role_result(issue_id, expected_role, result)
     else
       {:error, :lifecycle_requires_github_tracker}
     end
@@ -62,7 +64,9 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       :missing_returning_pm_reconciliation,
       :returning_pm_missing_completed_round_evidence,
       :missing_returning_pm_escalation_evidence,
-      :missing_pm_escalation_basis
+      :missing_pm_escalation_basis,
+      :missing_human_guidance_acknowledgment,
+      :invalid_human_guidance_acknowledgment
     ] or
       match?({:invalid_reconciliation_reference, _}, reason) or
       match?({:invalid_escalation_reference, _}, reason)
@@ -134,8 +138,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   defp prepare_github_dispatch_for_issue(issue_id) do
     with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
          {:ok, comments} <- github_client().fetch_issue_comments(issue_id) do
-      case LifecycleHistory.from_comments(comments) do
-        {:ok, history} -> prepare_github_dispatch(current_issue, history)
+      case parse_and_verify_history(comments) do
+        {:ok, history} -> prepare_github_dispatch(current_issue, history, comments)
         {:error, reason} -> handle_invalid_state(current_issue, nil, reason)
       end
     end
@@ -144,7 +148,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   defp commit_github_role_result(issue_id, expected_role, result) do
     with {:ok, current_issue} <- github_client().fetch_issue(issue_id),
          {:ok, comments} <- github_client().fetch_issue_comments(issue_id) do
-      case LifecycleHistory.from_comments(comments) do
+      case parse_and_verify_history(comments) do
         {:ok, history} -> commit_with_history(current_issue, history, expected_role, result)
         {:error, reason} -> commit_invalid_history(current_issue, reason)
       end
@@ -228,15 +232,24 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   defp event_material_matches_result?(event, result) do
     event["role"] == result["role"] and
       event["role_result_schema"] == result["schema"] and
-      Enum.all?(["summary", "evidence", "findings", "prerequisite_resolution"], fn key ->
-        Map.get(event, key) == Map.get(result, key)
-      end) and
-      Map.get(event, "human_question") == Map.get(result, "human_question") and
+      event_core_material_matches_result?(event, result) and
+      event_optional_material_matches_result?(event, result) and
+      (event["kind"] != "terminal" or
+         event["terminal_reason"] in expected_terminal_reasons(result))
+  end
+
+  defp event_core_material_matches_result?(event, result) do
+    Enum.all?(["summary", "evidence", "findings", "prerequisite_resolution"], fn key ->
+      Map.get(event, key) == Map.get(result, key)
+    end)
+  end
+
+  defp event_optional_material_matches_result?(event, result) do
+    Map.get(event, "human_question") == Map.get(result, "human_question") and
       Map.get(event, "reconciliation") == Map.get(result, "reconciliation") and
       Map.get(event, "revision_reconciliation") == Map.get(result, "revision_reconciliation") and
       Map.get(event, "escalation_basis") == Map.get(result, "escalation_basis") and
-      (event["kind"] != "terminal" or
-         event["terminal_reason"] in expected_terminal_reasons(result))
+      Map.get(event, "human_guidance_acknowledgment") == Map.get(result, "human_guidance_acknowledgment")
   end
 
   defp expected_terminal_reasons(%{"role" => role, "outcome" => "non_converged"})
@@ -273,7 +286,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
            "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
            "reconciliation" => Map.get(event, "reconciliation"),
            "revision_reconciliation" => Map.get(event, "revision_reconciliation"),
-           "escalation_basis" => Map.get(event, "escalation_basis")
+           "escalation_basis" => Map.get(event, "escalation_basis"),
+           "human_guidance_acknowledgment" => Map.get(event, "human_guidance_acknowledgment")
          }
        }}
     end
@@ -299,6 +313,9 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       lifecycle_id: history.lifecycle_id,
       current_role: history.current_role,
       round: history.round,
+      epoch: Map.get(history, :epoch, 0),
+      epoch_round: Map.get(history, :epoch_round, 0),
+      epoch_start_round: Map.get(history, :epoch_start_round, 1),
       planning_attempt: history.planning_attempt,
       pm_phase: history.pm_phase,
       completed_working_round?: history.completed_working_round?,
@@ -306,6 +323,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       prerequisite_context: Lifecycle.prerequisite_context(history),
       reconciliation: LifecycleEvidence.project(history),
       revision_reconciliation: LifecycleEvidence.revision_projection(history),
+      human_guidance: Map.get(history, :human_guidance),
       accepted_events: handoff_events
     }
   end
@@ -324,13 +342,16 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     }
   end
 
-  defp prepare_github_dispatch(issue, history) do
+  defp prepare_github_dispatch(issue, history, comments) do
     cond do
+      history.terminal == "awaiting-human" ->
+        prepare_human_continuation(issue, history, comments)
+
       history.active? ->
         with :ok <- validate_active_issue(issue),
-             :ok <- validate_opt_in(issue),
-             {:ok, role} <- RoleRouter.role_for_issue(issue),
-             :ok <- reconcile_active_projection(issue, history, role),
+             {:ok, projected_issue} <- ensure_active_projection_opt_in(issue, history),
+             {:ok, role} <- RoleRouter.role_for_issue(projected_issue),
+             :ok <- reconcile_active_projection(projected_issue, history, role),
              {:ok, projected_issue} <- github_client().fetch_issue(issue.id) do
           {:ok,
            %{
@@ -368,6 +389,125 @@ defmodule SymphonyElixir.LifecycleCoordinator do
         with :ok <- repair_terminal_projection(issue, history) do
           {:skip, {:terminal_lifecycle, history.terminal}}
         end
+    end
+  end
+
+  defp ensure_active_projection_opt_in(issue, %{events: events, current_role: role}) do
+    cond do
+      has_label?(issue.labels, @auto_label) ->
+        {:ok, issue}
+
+      Enum.any?(events, &(&1["kind"] == "human_response_accepted")) ->
+        repair_active_projection(issue, role)
+        |> case do
+          :ok -> github_client().fetch_issue(issue.id)
+          {:error, _reason} = error -> error
+        end
+
+      true ->
+        {:error, :symphony_auto_required}
+    end
+  end
+
+  defp parse_and_verify_history(comments) do
+    with {:ok, history} <- LifecycleHistory.from_comments(comments),
+         :ok <- LifecycleIntegrity.verify_events(history.events) do
+      {:ok, history}
+    end
+  end
+
+  defp prepare_human_continuation(issue, history, comments) do
+    with :ok <- validate_active_issue(issue),
+         {:ok, :pm} <- RoleRouter.role_for_issue(issue),
+         :ok <- validate_human_projection(issue),
+         {:ok, response} <- find_human_response(comments, history),
+         {:ok, resumed_history, resumed_issue} <- accept_human_response(issue, history, response) do
+      {:ok,
+       %{
+         issue: resumed_issue,
+         history: resumed_history,
+         handoff: dispatch_handoff(resumed_history),
+         lifecycle_context: Lifecycle.lifecycle_context(resumed_history)
+       }}
+    else
+      :none -> {:skip, :awaiting_human_response}
+      {:ok, :pm} -> {:error, :human_response_projection_requires_pm}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_human_projection(issue) do
+    if not has_label?(issue.labels, @auto_label) and has_label?(issue.labels, @awaiting_human_label),
+      do: :ok,
+      else: {:error, :invalid_awaiting_human_projection}
+  end
+
+  defp find_human_response(comments, history) do
+    case HumanResponse.find(
+           comments,
+           history.lifecycle_id,
+           history.transition_id,
+           Config.settings!().human_response.authorized_user_ids,
+           accepted_human_comment_ids(history)
+         ) do
+      :none -> :none
+      {:ok, response} -> {:ok, response}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp accepted_human_comment_ids(%{events: events}) when is_list(events) do
+    Enum.flat_map(events, fn
+      %{"kind" => "human_response_accepted", "guidance" => %{"provenance" => %{"comment_id" => id}}}
+      when is_integer(id) ->
+        [id]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp accept_human_response(issue, history, response) do
+    epoch = history.epoch + 1
+
+    event = %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "human_response_accepted",
+      "lifecycle_id" => history.lifecycle_id,
+      "transition_id" => "#{history.lifecycle_id}:epoch#{epoch}:human_response",
+      "escalation_transition_id" => history.transition_id,
+      "epoch" => epoch,
+      "starting_round" => history.round + 1,
+      "guidance" => %{
+        "decision" => response["decision"],
+        "text" => response["guidance"],
+        "authorized_actions" => response["authorized_actions"],
+        "provenance" => response[:provenance]
+      }
+    }
+
+    with {:ok, persisted} <- persist_human_response(issue, history, event),
+         {:ok, projected_issue} <- project_and_verify(issue, %{kind: "transition", to_role: :pm}),
+         {:ok, resumed_history} <- LifecycleHistory.project(history.events ++ [persisted]) do
+      {:ok, resumed_history, projected_issue}
+    end
+  end
+
+  defp persist_human_response(issue, history, event) do
+    event = LifecycleIntegrity.sign(event)
+
+    case Enum.find(history.events, &(&1["transition_id"] == event["transition_id"])) do
+      nil ->
+        case github_client().append_issue_comment(issue.id, LifecycleHistory.render(event)) do
+          {:ok, _comment} -> {:ok, event}
+          {:error, reason} -> {:error, {:human_response_persistence_failed, reason}}
+        end
+
+      existing when existing == event ->
+        {:ok, existing}
+
+      _existing ->
+        {:error, {:conflicting_human_response, event["transition_id"]}}
     end
   end
 
@@ -436,7 +576,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       with {:ok, _comment} <- github_client().append_issue_comment(issue.id, body),
            {:ok, projected_issue} <- project_and_verify(issue, %{kind: "transition", to_role: :pm}),
            {:ok, comments} <- github_client().fetch_issue_comments(issue.id),
-           {:ok, started_history} <- LifecycleHistory.from_comments(comments),
+           {:ok, started_history} <- parse_and_verify_history(comments),
            {:ok, :pm} <- {:ok, started_history.current_role} do
         {:ok,
          %{
@@ -554,9 +694,15 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp validate_evidence_reconciliation(history, %{"role" => "PM"} = result) do
-    case validate_pm_escalation_basis(result) do
-      :ok -> validate_pm_reconciliation(history, result)
-      {:error, _reason} = error -> error
+    case validate_pm_guidance_acknowledgment(history, result) do
+      :ok ->
+        case validate_pm_escalation_basis(result) do
+          :ok -> validate_pm_reconciliation(history, result)
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -576,6 +722,23 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp validate_evidence_reconciliation(_history, _result), do: :ok
+
+  defp validate_pm_guidance_acknowledgment(%{human_guidance: nil}, _result), do: :ok
+
+  defp validate_pm_guidance_acknowledgment(%{human_guidance: guidance}, %{"role" => "PM"} = result)
+       when is_map(guidance) do
+    acknowledgment = Map.get(result, "human_guidance_acknowledgment")
+
+    if is_map(acknowledgment) and
+         acknowledgment["response_transition_id"] == guidance["response_transition_id"] do
+      :ok
+    else
+      {:error, :missing_human_guidance_acknowledgment}
+    end
+  end
+
+  defp validate_pm_guidance_acknowledgment(_history, _result),
+    do: {:error, :missing_human_guidance_acknowledgment}
 
   defp accepted_planner_result?(%{events: events}, result) when is_list(events) do
     Enum.any?(events, fn event ->
@@ -896,6 +1059,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       "reconciliation" => Map.get(result, "reconciliation"),
       "revision_reconciliation" => Map.get(result, "revision_reconciliation"),
       "escalation_basis" => Map.get(result, "escalation_basis"),
+      "human_guidance_acknowledgment" => Map.get(result, "human_guidance_acknowledgment"),
       "terminal_reason" => Map.get(transition, :terminal_reason)
     })
   end
@@ -921,7 +1085,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp project_labels(issue, {:role, role}) do
-    with :ok <- remove_present_role_labels(issue),
+    with :ok <- ensure_auto_label(issue),
+         :ok <- remove_present_role_labels(issue),
          :ok <- remove_state_labels(issue),
          {:ok, _} <- github_client().add_issue_label(issue.id, RoleProfiles.role_label(role)) do
       :ok
@@ -949,6 +1114,17 @@ defmodule SymphonyElixir.LifecycleCoordinator do
          :ok <- remove_state_labels(issue),
          {:ok, _} <- github_client().add_issue_label(issue.id, state_label) do
       :ok
+    end
+  end
+
+  defp ensure_auto_label(issue) do
+    if has_label?(issue.labels, @auto_label) do
+      :ok
+    else
+      case github_client().add_issue_label(issue.id, @auto_label) do
+        {:ok, _} -> :ok
+        {:error, _reason} = error -> error
+      end
     end
   end
 
@@ -1162,6 +1338,13 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp github_tracker?, do: Config.settings!().tracker.kind == "github"
+
+  defp require_lifecycle_integrity do
+    case Config.settings!().lifecycle.integrity_secret do
+      secret when is_binary(secret) and byte_size(secret) > 0 -> :ok
+      _ -> {:error, :missing_lifecycle_integrity_secret}
+    end
+  end
 
   defp github_client do
     Application.get_env(:symphony_elixir, :github_client_module, Client)

@@ -115,6 +115,85 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert first_planner_context == second_planner_context
   end
 
+  test "accepts one authenticated human response and resumes the same PM epoch" do
+    lifecycle_id = "human-continuation"
+
+    escalation =
+      transition_event(lifecycle_id, "PM", "await_human", "AWAITING_HUMAN", 0, 0)
+      |> Map.merge(%{
+        "kind" => "escalation",
+        "transition_id" => LifecycleHistory.transition_id(lifecycle_id, 0, 0, :pm, "await_human"),
+        "human_question" => "Which bounded direction is authorized?",
+        "escalation_basis" => %{
+          "required_external_action" => "Supply a bounded direction.",
+          "existing_authority_gap" => "The host cannot choose it.",
+          "supporting_transition_ids" => [LifecycleHistory.transition_id(lifecycle_id, 0, 0, :pm, "await_human")]
+        }
+      })
+
+    response = %{
+      "id" => 701,
+      "body" => human_response_body(lifecycle_id, escalation["transition_id"], "Continue with the constrained correction."),
+      "user" => %{"id" => 12_345, "login" => "configured-user"},
+      "created_at" => "2026-09-20T12:00:00Z",
+      "updated_at" => "2026-09-20T12:00:00Z",
+      "html_url" => "https://github.test/octo/repo/issues/42#issuecomment-701"
+    }
+
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{
+        state
+        | issue: %{state.issue | labels: ["symphony:state:awaiting-human", "symphony:role:pm", "human-label"]},
+          comments: Enum.map([LifecycleHistory.start_event(lifecycle_id), escalation], &%{"body" => LifecycleHistory.render(&1)}) ++ [response]
+      }
+    end)
+
+    issue = github_issue()
+
+    assert {:ok, %{history: history, issue: resumed_issue, handoff: handoff}} =
+             LifecycleCoordinator.prepare_dispatch(issue)
+
+    assert history.lifecycle_id == lifecycle_id
+    assert history.epoch == 1
+    assert history.current_role == :pm
+    assert history.human_guidance["text"] == "Continue with the constrained correction."
+    assert handoff.human_guidance["provenance"]["comment_id"] == 701
+    assert resumed_issue.labels == ["human-label", "symphony:auto", "symphony:role:pm"]
+
+    state = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+    assert Enum.any?(state.issue.labels, &(&1 == "symphony:auto"))
+    assert Enum.any?(state.issue.labels, &(&1 == "symphony:role:pm"))
+    assert Enum.count(state.comments, &String.contains?(&1["body"], "human_response_accepted")) == 1
+
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{state | issue: %{state.issue | labels: ["symphony:state:awaiting-human", "symphony:role:pm", "human-label"]}}
+    end)
+
+    assert {:ok, %{history: replayed}} = LifecycleCoordinator.prepare_dispatch(resumed_issue)
+    assert replayed.epoch == 1
+    assert Enum.count(replayed.events, &(&1["kind"] == "human_response_accepted")) == 1
+
+    repaired_state = Agent.get(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), & &1)
+    assert Enum.any?(repaired_state.issue.labels, &(&1 == "symphony:auto"))
+    assert Enum.count(repaired_state.comments, &String.contains?(&1["body"], "human_response_accepted")) == 1
+
+    plan = role_result("PM", "plan", "The guidance is applied to the constrained plan.")
+
+    assert {:error, :missing_human_guidance_acknowledgment} =
+             LifecycleCoordinator.commit_role_result(resumed_issue, :pm, plan)
+
+    plan =
+      Map.put(plan, "human_guidance_acknowledgment", %{
+        "response_transition_id" => "#{lifecycle_id}:epoch1:human_response",
+        "assessment" => "The plan follows the guidance and does not infer additional authority."
+      })
+
+    assert {:ok, %{event: committed}} =
+             LifecycleCoordinator.commit_role_result(resumed_issue, :pm, plan)
+
+    assert committed["round"] == 1
+  end
+
   test "Reviewer revision dispatch carries the exact Planner and Reviewer evidence pair" do
     lifecycle_id = "planner-revision"
     install_planner_revision_history(planner_revision_events(lifecycle_id))
@@ -587,6 +666,10 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
       interval_ms: 30000
     workspace:
       root: "#{Path.join(System.tmp_dir!(), "symphony-lifecycle-test-workspaces")}"
+    human_response:
+      authorized_user_ids: [12345]
+    lifecycle:
+      integrity_secret: "test-lifecycle-secret"
     """
   end
 
@@ -754,6 +837,22 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     ]
 
     Enum.map(events, &%{"body" => LifecycleHistory.render(&1)})
+  end
+
+  defp human_response_body(lifecycle_id, escalation_transition_id, guidance) do
+    "<!-- symphony.human-response/v1\n" <>
+      Jason.encode!(
+        %{
+          "schema" => "symphony.human-response/v1",
+          "lifecycle_id" => lifecycle_id,
+          "escalation_transition_id" => escalation_transition_id,
+          "decision" => "continue",
+          "guidance" => guidance,
+          "authorized_actions" => []
+        },
+        pretty: true
+      ) <>
+      "\n-->\n"
   end
 
   defp transition_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt) do

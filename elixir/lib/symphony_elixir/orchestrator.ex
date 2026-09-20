@@ -169,6 +169,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
           |> maybe_put_runtime_value(:authority_snapshot, runtime_info[:authority_snapshot])
+          |> maybe_put_runtime_value(:source_provenance, runtime_info[:source_provenance])
 
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
