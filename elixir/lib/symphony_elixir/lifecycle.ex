@@ -23,12 +23,14 @@ defmodule SymphonyElixir.Lifecycle do
     reconciliation
     revision_reconciliation
     escalation_basis
+    human_guidance_acknowledgment
   )
   @finding_keys ~w(severity summary evidence)
   @reconciliation_keys ~w(considered_transition_ids assessment)
   @revision_reconciliation_keys ~w(rejected_planner_transition_id reviewer_transition_id finding_responses)
   @revision_finding_response_keys ~w(finding_ref assessment plan_excerpt)
   @escalation_basis_keys ~w(required_external_action existing_authority_gap supporting_transition_ids)
+  @human_guidance_acknowledgment_keys ~w(response_transition_id assessment)
   @prerequisite_resolution_keys ~w(
     blocked_objective
     missing_prerequisite
@@ -61,11 +63,29 @@ defmodule SymphonyElixir.Lifecycle do
          :ok <- validate_reconciliation(role, Map.get(result, "reconciliation")),
          :ok <- validate_revision_reconciliation(role, outcome, Map.get(result, "revision_reconciliation")),
          :ok <- validate_escalation_basis(role, outcome, Map.get(result, "escalation_basis")) do
-      {:ok, result}
+      with :ok <- validate_human_guidance_acknowledgment(role, Map.get(result, "human_guidance_acknowledgment")),
+           do: {:ok, result}
     end
   end
 
   def validate_result(_result), do: {:error, :role_result_not_a_map}
+
+  defp validate_human_guidance_acknowledgment(_role, nil), do: :ok
+
+  defp validate_human_guidance_acknowledgment(:pm, acknowledgment) when is_map(acknowledgment) do
+    if Map.keys(acknowledgment) -- @human_guidance_acknowledgment_keys == [] and
+         Enum.all?(@human_guidance_acknowledgment_keys, &Map.has_key?(acknowledgment, &1)) and
+         is_binary(acknowledgment["response_transition_id"]) and
+         String.trim(acknowledgment["response_transition_id"]) != "" and
+         is_binary(acknowledgment["assessment"]) and String.trim(acknowledgment["assessment"]) != "" do
+      :ok
+    else
+      {:error, :invalid_human_guidance_acknowledgment}
+    end
+  end
+
+  defp validate_human_guidance_acknowledgment(_role, _acknowledgment),
+    do: {:error, :invalid_human_guidance_acknowledgment}
 
   @spec decode_and_validate_result(String.t(), RoleProfiles.role()) ::
           {:ok, map()} | {:error, term()}
@@ -213,6 +233,9 @@ defmodule SymphonyElixir.Lifecycle do
           object_received: object_received(role, state, predecessor),
           object_produced: object_produced(role),
           round: Map.get(state, :round),
+          epoch: Map.get(state, :epoch, 0),
+          epoch_round: Map.get(state, :epoch_round, 0),
+          epoch_start_round: Map.get(state, :epoch_start_round, 1),
           planning_attempt: Map.get(state, :planning_attempt),
           pm_phase: phase_name(Map.get(state, :pm_phase)),
           completed_working_round?: Map.get(state, :completed_working_round?, false),
@@ -221,7 +244,8 @@ defmodule SymphonyElixir.Lifecycle do
           not_yet_happened: not_yet_happened(role, predecessor),
           outcome_routes: outcome_routes(role, transition_context),
           temporal_interpretation: temporal_interpretation(role, predecessor),
-          prerequisite_context: prerequisite
+          prerequisite_context: prerequisite,
+          human_guidance: Map.get(state, :human_guidance)
         }
 
       {:error, _reason} ->

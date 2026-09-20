@@ -135,6 +135,23 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert returning_pm_prompt =~ "Host correction diagnostic"
     assert returning_pm_prompt =~ "PM reconciliation contract"
 
+    resumed_pm_prompt =
+      PromptBuilder.build_prompt(issue, :pm, %{
+        lifecycle_context: %{
+          human_guidance: %{
+            "response_transition_id" => "life:epoch1:human_response",
+            "decision" => "continue",
+            "text" => "Continue with the constrained correction.",
+            "authorized_actions" => [],
+            "provenance" => %{"comment_id" => 77, "author_id" => 7001}
+          }
+        }
+      })
+
+    assert resumed_pm_prompt =~ "Host-accepted human guidance"
+    assert resumed_pm_prompt =~ "life:epoch1:human_response"
+    assert resumed_pm_prompt =~ "Continue with the constrained correction."
+
     planner_revision_prompt =
       PromptBuilder.build_prompt(issue, :planner, %{
         handoff: %{
@@ -530,6 +547,9 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert {:error, :invalid_role_result_findings} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "findings", :none))
+
+    assert {:error, :invalid_human_guidance_acknowledgment} =
+             Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "human_guidance_acknowledgment", %{}))
 
     assert {:error, :role_result_not_a_map} = Lifecycle.validate_result(:not_a_result)
 

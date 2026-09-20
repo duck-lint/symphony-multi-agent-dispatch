@@ -7,10 +7,17 @@ defmodule SymphonyElixir.LifecycleHistory do
   `render/1` and contains a valid lifecycle event.
   """
 
-  alias SymphonyElixir.{Lifecycle, RoleProfiles}
+  alias SymphonyElixir.{Lifecycle, LifecycleIntegrity, RoleProfiles}
 
   @schema "symphony.lifecycle/v1"
-  @event_kinds ["lifecycle_started", "transition", "terminal", "escalation", "blocked"]
+  @event_kinds [
+    "lifecycle_started",
+    "transition",
+    "terminal",
+    "escalation",
+    "human_response_accepted",
+    "blocked"
+  ]
   @roles [:pm, :planner, :reviewer, :implementer, :adversary, :archivist]
   @role_names Map.new(@roles, &{RoleProfiles.role_name(&1), &1})
 
@@ -21,6 +28,10 @@ defmodule SymphonyElixir.LifecycleHistory do
           current_role: RoleProfiles.role() | nil,
           round: non_neg_integer(),
           planning_attempt: non_neg_integer(),
+          epoch: non_neg_integer(),
+          epoch_round: non_neg_integer(),
+          epoch_start_round: non_neg_integer(),
+          human_guidance: map() | nil,
           pm_phase: :initial | :returning | nil,
           completed_working_round?: boolean(),
           preceding_adversary_findings: list(),
@@ -111,7 +122,8 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   @spec render(event()) :: String.t()
   def render(event) when is_map(event) do
-    "```json\n#{Jason.encode!(event, pretty: true)}\n```\n"
+    signed_event = LifecycleIntegrity.sign(event)
+    "```json\n#{Jason.encode!(signed_event, pretty: true)}\n```\n"
   end
 
   @spec start_event(String.t()) :: event()
@@ -130,6 +142,10 @@ defmodule SymphonyElixir.LifecycleHistory do
       current_role: nil,
       round: 0,
       planning_attempt: 0,
+      epoch: 0,
+      epoch_round: 0,
+      epoch_start_round: 1,
+      human_guidance: nil,
       pm_phase: nil,
       completed_working_round?: false,
       preceding_adversary_findings: [],
@@ -206,7 +222,7 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp validate_kind(kind), do: {:error, {:invalid_lifecycle_event_kind, kind}}
 
   defp validate_kind_fields(%{"kind" => "lifecycle_started"} = event) do
-    if Map.keys(event) -- ["schema", "kind", "lifecycle_id"] == [] do
+    if Map.keys(event) -- ["schema", "kind", "lifecycle_id", "integrity"] == [] do
       :ok
     else
       {:error, :invalid_lifecycle_started_fields}
@@ -220,6 +236,41 @@ defmodule SymphonyElixir.LifecycleHistory do
       validate_event_role_result(event)
     end
   end
+
+  defp validate_kind_fields(%{"kind" => "human_response_accepted"} = event) do
+    required = ~w(transition_id escalation_transition_id epoch starting_round guidance)
+
+    with :ok <- require_fields(event, required),
+         :ok <- validate_transition_id_field(event["transition_id"]),
+         :ok <- validate_transition_id_field(event["escalation_transition_id"]),
+         :ok <- validate_non_negative_number(event["epoch"]),
+         :ok <- validate_non_negative_number(event["starting_round"]) do
+      validate_guidance(event["guidance"])
+    end
+  end
+
+  defp require_fields(event, fields) do
+    Enum.reduce_while(fields, :ok, fn key, :ok ->
+      if Map.has_key?(event, key), do: {:cont, :ok}, else: {:halt, {:missing_lifecycle_event_field, key}}
+    end)
+  end
+
+  defp validate_transition_id_field(value) when is_binary(value) and value != "", do: :ok
+  defp validate_transition_id_field(_value), do: {:error, :invalid_human_response_transition_id}
+
+  defp validate_non_negative_number(value) when is_integer(value) and value >= 0, do: :ok
+  defp validate_non_negative_number(_value), do: {:error, :invalid_human_response_position}
+
+  defp validate_guidance(%{"decision" => decision, "text" => text, "authorized_actions" => actions})
+       when decision in ["continue"] and is_binary(text) and is_list(actions) do
+    if String.trim(text) != "" and Enum.all?(actions, &(is_binary(&1) and String.trim(&1) != "")) do
+      :ok
+    else
+      {:error, :invalid_human_response_guidance}
+    end
+  end
+
+  defp validate_guidance(_guidance), do: {:error, :invalid_human_response_guidance}
 
   defp validate_event_role_result(%{"kind" => "blocked"}), do: :ok
 
@@ -236,7 +287,8 @@ defmodule SymphonyElixir.LifecycleHistory do
         "prerequisite_resolution" => Map.get(event, "prerequisite_resolution"),
         "reconciliation" => Map.get(event, "reconciliation"),
         "revision_reconciliation" => Map.get(event, "revision_reconciliation"),
-        "escalation_basis" => Map.get(event, "escalation_basis")
+        "escalation_basis" => Map.get(event, "escalation_basis"),
+        "human_guidance_acknowledgment" => Map.get(event, "human_guidance_acknowledgment")
       }
 
       case Lifecycle.validate_result(result) do
@@ -339,6 +391,15 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp apply_event(%{active?: true} = _state, %{"kind" => "lifecycle_started"}),
     do: {:error, :active_lifecycle_restarted}
 
+  defp apply_event(
+         %{terminal: "awaiting-human", lifecycle_id: lifecycle_id} = state,
+         %{
+           "kind" => "human_response_accepted",
+           "lifecycle_id" => lifecycle_id
+         } = event
+       ),
+       do: apply_human_response_event(state, event)
+
   defp apply_event(%{active?: false, lifecycle_id: lifecycle_id}, %{"lifecycle_id" => lifecycle_id}),
     do: {:error, :lifecycle_event_after_terminal}
 
@@ -413,6 +474,41 @@ defmodule SymphonyElixir.LifecycleHistory do
     else
       {:error, _reason} = error -> error
       _ -> {:error, :invalid_lifecycle_escalation}
+    end
+  end
+
+  defp apply_human_response_event(%{active?: false, terminal: "awaiting-human"} = state, event) do
+    cond do
+      event["escalation_transition_id"] != state.transition_id ->
+        {:error, :stale_human_response_escalation}
+
+      state.current_role != :pm ->
+        {:error, :human_response_requires_pm_escalation}
+
+      event["epoch"] != state.epoch + 1 ->
+        {:error, :invalid_human_response_epoch}
+
+      event["starting_round"] != state.round + 1 ->
+        {:error, :invalid_human_response_starting_round}
+
+      event["transition_id"] != "#{state.lifecycle_id}:epoch#{event["epoch"]}:human_response" ->
+        {:error, :invalid_human_response_transition_id}
+
+      true ->
+        {:ok,
+         %{
+           state
+           | active?: true,
+             terminal: nil,
+             current_role: :pm,
+             pm_phase: state.pm_phase || :returning,
+             epoch: event["epoch"],
+             epoch_round: 0,
+             epoch_start_round: event["starting_round"],
+             human_guidance: Map.put(event["guidance"], "response_transition_id", event["transition_id"]),
+             transition_id: event["transition_id"],
+             events: state.events ++ [event]
+         }}
     end
   end
 
@@ -493,6 +589,7 @@ defmodule SymphonyElixir.LifecycleHistory do
         current_role: :planner,
         round: event["round"],
         planning_attempt: 1,
+        epoch_round: state.epoch_round + 1,
         pm_phase: :returning,
         transition_id: event["transition_id"]
     }

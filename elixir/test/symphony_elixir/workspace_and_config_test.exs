@@ -40,6 +40,125 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "configured branch provenance is verified from the checked-out repository" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-source-branch-#{System.unique_integer([:positive])}")
+    repository = Path.join(test_root, "repository")
+    workspace_root = Path.join(test_root, "workspaces")
+
+    try do
+      File.mkdir_p!(repository)
+      File.write!(Path.join(repository, "README.md"), "checkpoint\n")
+      System.cmd("git", ["-C", repository, "init", "-b", "slice2/probe"])
+      System.cmd("git", ["-C", repository, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repository, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", repository, "add", "README.md"])
+      System.cmd("git", ["-C", repository, "commit", "-m", "checkpoint"])
+
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
+        workspace_root: workspace_root,
+        workspace_repository: repository,
+        workspace_branch: "slice2/probe",
+        hook_after_create: "git clone --branch slice2/probe #{repository} ."
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("GH-11")
+      assert {:ok, report} = Workspace.verify_source_provenance(workspace)
+      assert report["status"] == "verified"
+      assert report["branch"] == "slice2/probe"
+      assert report["head"] == report["branch_commit"]
+      assert report["repository"] == repository
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "a dirty existing workspace is inspected without replacement" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-source-dirty-#{System.unique_integer([:positive])}")
+    repository = Path.join(test_root, "repository")
+    workspace_root = Path.join(test_root, "workspaces")
+
+    try do
+      File.mkdir_p!(repository)
+      File.write!(Path.join(repository, "README.md"), "original\n")
+      System.cmd("git", ["-C", repository, "init", "-b", "main"])
+      System.cmd("git", ["-C", repository, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", repository, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", repository, "add", "README.md"])
+      System.cmd("git", ["-C", repository, "commit", "-m", "initial"])
+
+      write_instance_config_file!(InstanceConfig.instance_config_file_path(),
+        workspace_root: workspace_root,
+        workspace_repository: repository,
+        workspace_branch: "main",
+        hook_after_create: "git clone --branch main #{repository} ."
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("GH-12")
+      File.write!(Path.join(workspace, "README.md"), "local work\n")
+      assert {:ok, ^workspace} = Workspace.create_for_issue("GH-12")
+      assert File.read!(Path.join(workspace, "README.md")) == "local work\n"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "unsafe and mismatched source declarations fail closed" do
+    assert {:error, _changeset} =
+             Ecto.Changeset.apply_action(
+               Schema.Workspace.changeset(%Schema.Workspace{}, %{
+                 "repository" => "/tmp/repository",
+                 "branch" => "../unsafe"
+               }),
+               :validate
+             )
+
+    workspace = Path.join(System.tmp_dir!(), "symphony-source-mismatch-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+
+    write_instance_config_file!(InstanceConfig.instance_config_file_path(),
+      workspace_root: Path.dirname(workspace),
+      workspace_repository: "/tmp/does-not-match",
+      workspace_branch: "main"
+    )
+
+    assert {:error, _reason} = Workspace.verify_source_provenance(workspace)
+    File.rm_rf(workspace)
+  end
+
+  test "rejects incomplete, malformed, and unsafe source declarations" do
+    assert {:error, changeset} =
+             Ecto.Changeset.apply_action(
+               Schema.Workspace.changeset(%Schema.Workspace{}, %{"repository" => "/tmp/repository"}),
+               :validate
+             )
+
+    assert Keyword.has_key?(changeset.errors, :branch)
+
+    assert {:error, changeset} =
+             Ecto.Changeset.apply_action(
+               Schema.Workspace.changeset(%Schema.Workspace{}, %{"repository" => "   ", "branch" => "main"}),
+               :validate
+             )
+
+    assert Keyword.has_key?(changeset.errors, :repository)
+
+    assert {:error, changeset} =
+             Ecto.Changeset.apply_action(
+               Schema.Workspace.changeset(%Schema.Workspace{}, %{"repository" => "/tmp/repo\n", "branch" => "main"}),
+               :validate
+             )
+
+    assert Keyword.has_key?(changeset.errors, :repository)
+
+    assert {:error, changeset} =
+             Ecto.Changeset.apply_action(
+               Schema.Workspace.changeset(%Schema.Workspace{}, %{"repository" => "/tmp/repository", "branch" => 42}),
+               :validate
+             )
+
+    assert Keyword.has_key?(changeset.errors, :branch)
+  end
+
   test "workspace path is deterministic per issue identifier" do
     workspace_root =
       Path.join(

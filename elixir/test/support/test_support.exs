@@ -118,6 +118,10 @@ defmodule SymphonyElixir.TestSupport do
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
+          workspace_repository: nil,
+          workspace_branch: nil,
+          human_response_authorized_user_ids: [12_345],
+          lifecycle_integrity_secret: "test-lifecycle-secret",
           environment_capabilities: [],
           worker_ssh_hosts: [],
           worker_max_concurrent_agents_per_host: nil,
@@ -155,6 +159,10 @@ defmodule SymphonyElixir.TestSupport do
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
+    workspace_repository = Keyword.get(config, :workspace_repository)
+    workspace_branch = Keyword.get(config, :workspace_branch)
+    human_response_authorized_user_ids = Keyword.get(config, :human_response_authorized_user_ids)
+    lifecycle_integrity_secret = Keyword.get(config, :lifecycle_integrity_secret)
     environment_capabilities = Keyword.get(config, :environment_capabilities)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
@@ -194,8 +202,13 @@ defmodule SymphonyElixir.TestSupport do
         "  interval_ms: #{yaml_value(poll_interval_ms)}",
         "workspace:",
         "  root: #{yaml_value(workspace_root)}",
+        workspace_source_yaml(workspace_repository, workspace_branch),
         "environment:",
         "  capabilities: #{yaml_value(environment_capabilities)}",
+        "human_response:",
+        "  authorized_user_ids: #{yaml_value(human_response_authorized_user_ids)}",
+        "lifecycle:",
+        "  integrity_secret: #{yaml_value(lifecycle_integrity_secret)}",
         worker_yaml(worker_ssh_hosts, worker_max_concurrent_agents_per_host),
         "agent:",
         "  max_concurrent_agents: #{yaml_value(max_concurrent_agents)}",
@@ -252,6 +265,16 @@ defmodule SymphonyElixir.TestSupport do
       hook_entry("before_remove", hook_before_remove)
     ]
     |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp workspace_source_yaml(nil, nil), do: nil
+
+  defp workspace_source_yaml(repository, branch) do
+    [
+      "  repository: #{yaml_value(repository)}",
+      "  branch: #{yaml_value(branch)}"
+    ]
     |> Enum.join("\n")
   end
 

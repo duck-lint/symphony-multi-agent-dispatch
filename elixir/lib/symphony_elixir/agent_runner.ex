@@ -67,23 +67,27 @@ defmodule SymphonyElixir.AgentRunner do
       {:ok, workspace} ->
         with {:ok, role_policy} <- RoleRuntimePolicy.for_role(role, workspace, worker_host: worker_host),
              {:ok, boundary} <- Workspace.enforce_role_boundary(workspace, role_policy, worker_host) do
-          send_worker_runtime_info(
-            codex_update_recipient,
-            issue,
-            worker_host,
-            workspace,
-            role_policy,
-            boundary
-          )
-
           try do
             with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host),
+                 {:ok, source_provenance} <- Workspace.verify_source_provenance(workspace, worker_host),
                  {:ok, capability_report} <- EnvironmentCapabilities.verify(workspace, worker_host) do
+              send_worker_runtime_info(
+                codex_update_recipient,
+                issue,
+                worker_host,
+                workspace,
+                role_policy,
+                boundary,
+                source_provenance
+              )
+
               run_role_turn(
                 workspace,
                 issue,
                 codex_update_recipient,
-                Keyword.put(opts, :environment_capabilities, capability_report),
+                opts
+                |> Keyword.put(:environment_capabilities, capability_report)
+                |> Keyword.put(:source_provenance, source_provenance),
                 worker_host,
                 role,
                 role_profile,
@@ -120,7 +124,8 @@ defmodule SymphonyElixir.AgentRunner do
          worker_host,
          workspace,
          role_policy,
-         boundary
+         boundary,
+         source_provenance
        )
        when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) and is_map(role_policy) and
               is_map(boundary) do
@@ -132,14 +137,15 @@ defmodule SymphonyElixir.AgentRunner do
          workspace_path: workspace,
          authority_snapshot:
            RoleRuntimePolicy.snapshot(role_policy)
-           |> Map.put(:git_metadata_boundary, boundary.git_metadata_protection)
+           |> Map.put(:git_metadata_boundary, boundary.git_metadata_protection),
+         source_provenance: source_provenance
        }}
     )
 
     :ok
   end
 
-  defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace, _role_policy, _boundary), do: :ok
+  defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace, _role_policy, _boundary, _source_provenance), do: :ok
 
   defp run_role_turn(
          workspace,
@@ -202,7 +208,8 @@ defmodule SymphonyElixir.AgentRunner do
       runtime_authority: RoleRuntimePolicy.snapshot(role_policy),
       lifecycle_context: Keyword.get(opts, :lifecycle_context),
       correction_feedback: Keyword.get(opts, :correction_feedback),
-      environment_capabilities: Keyword.get(opts, :environment_capabilities)
+      environment_capabilities: Keyword.get(opts, :environment_capabilities),
+      source_provenance: Keyword.get(opts, :source_provenance)
     }
 
     prompt = PromptBuilder.build_prompt(issue, role, prompt_context)

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.LifecycleHistoryTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.LifecycleHistory
+  alias SymphonyElixir.{LifecycleHistory, LifecycleIntegrity}
 
   test "ordinary comments are ignored and lifecycle comments project accepted history" do
     events = [
@@ -41,7 +41,8 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     assert body =~ "```json"
     assert body =~ "\"human_question\": \"Which direction should the implementation take?\""
     assert body =~ "\"review note\""
-    assert {:ok, ^event} = LifecycleHistory.parse_comment(body)
+    signed_event = LifecycleIntegrity.sign(event)
+    assert {:ok, ^signed_event} = LifecycleHistory.parse_comment(body)
   end
 
   test "old hidden lifecycle comments fail instead of becoming inferred history" do
@@ -60,9 +61,10 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     start = LifecycleHistory.start_event("life-parser")
     comment = LifecycleHistory.render(start)
 
-    assert {:ok, ^start} = LifecycleHistory.parse_comment(comment)
-    assert {:ok, ^start} = LifecycleHistory.parse_comment(%{body: comment})
-    assert {:ok, ^start} = LifecycleHistory.parse_comment(%{body: comment})
+    signed_start = LifecycleIntegrity.sign(start)
+    assert {:ok, ^signed_start} = LifecycleHistory.parse_comment(comment)
+    assert {:ok, ^signed_start} = LifecycleHistory.parse_comment(%{body: comment})
+    assert {:ok, ^signed_start} = LifecycleHistory.parse_comment(%{body: comment})
     assert {:error, :malformed_lifecycle_comment} = LifecycleHistory.parse_comment(%{body: comment <> " trailing"})
 
     hidden_comment = "<!-- symphony.lifecycle/v1\n#{Jason.encode!(start)}\n-->"
@@ -253,6 +255,65 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     assert history.round == 2
     assert history.planning_attempt == 1
     assert history.completed_working_round?
+  end
+
+  test "accepted human guidance starts an epoch without resetting global rounds" do
+    lifecycle_id = "life-epoch"
+
+    start = LifecycleHistory.start_event(lifecycle_id)
+
+    escalation =
+      transition_event(lifecycle_id, "PM", "await_human", "AWAITING_HUMAN", 0, 0)
+      |> Map.merge(%{
+        "kind" => "escalation",
+        "transition_id" => LifecycleHistory.transition_id(lifecycle_id, 0, 0, :pm, "await_human"),
+        "human_question" => "Which authorized direction should continue?",
+        "escalation_basis" => %{
+          "required_external_action" => "Supply a bounded decision.",
+          "existing_authority_gap" => "The host cannot choose the product direction.",
+          "supporting_transition_ids" => [LifecycleHistory.transition_id(lifecycle_id, 0, 0, :pm, "await_human")]
+        }
+      })
+
+    accepted = %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "human_response_accepted",
+      "lifecycle_id" => lifecycle_id,
+      "transition_id" => "#{lifecycle_id}:epoch1:human_response",
+      "escalation_transition_id" => escalation["transition_id"],
+      "epoch" => 1,
+      "starting_round" => 1,
+      "guidance" => %{
+        "decision" => "continue",
+        "text" => "Continue with the smallest supported correction.",
+        "authorized_actions" => [],
+        "provenance" => %{"comment_id" => 99, "author_id" => 7001}
+      }
+    }
+
+    assert {:ok, resumed} = LifecycleHistory.project([start, escalation, accepted])
+    assert resumed.active?
+    assert resumed.current_role == :pm
+    assert resumed.round == 0
+    assert resumed.epoch == 1
+    assert resumed.epoch_round == 0
+    assert resumed.epoch_start_round == 1
+    assert resumed.human_guidance["text"] == "Continue with the smallest supported correction."
+
+    next_plan = transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)
+    assert {:ok, planned} = LifecycleHistory.project([start, escalation, accepted, next_plan])
+    assert planned.round == 1
+    assert planned.epoch_round == 1
+    assert planned.epoch == 1
+
+    assert {:error, :invalid_human_response_transition_id} =
+             parse_event(Map.put(accepted, "transition_id", ""))
+
+    assert {:error, :invalid_human_response_position} =
+             parse_event(Map.put(accepted, "epoch", -1))
+
+    assert {:error, :invalid_human_response_guidance} =
+             parse_event(Map.put(accepted, "guidance", %{}))
   end
 
   defp transition_event(lifecycle_id, from_role, outcome, to_role, round, planning_attempt) do
