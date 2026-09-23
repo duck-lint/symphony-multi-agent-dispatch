@@ -626,6 +626,31 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert diagnostic =~ "Received: JSON string."
     assert diagnostic =~ "Preserve the factual evidence and serialize it as an array."
 
+    assert Lifecycle.correction_diagnostic({:invalid_prerequisite_list, :absence_evidence}) =~
+             "Received: unavailable."
+
+    assert Lifecycle.correction_diagnostic({:invalid_prerequisite_list, :other}) =~
+             "Invalid field: prerequisite_resolution.other"
+
+    for {value, expected_type} <- [
+          {%{}, "JSON object"},
+          {true, "JSON boolean"},
+          {1, "JSON number"},
+          {nil, "JSON null"},
+          {[1], "JSON array"}
+        ] do
+      malformed_result =
+        report
+        |> Map.put("absence_evidence", value)
+        |> then(&Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", &1))
+
+      assert {:error, {:invalid_prerequisite_list, :absence_evidence, type_context}} =
+               Lifecycle.decode_and_validate_result(Jason.encode!(malformed_result), :planner)
+
+      assert Lifecycle.correction_diagnostic({:invalid_prerequisite_list, :absence_evidence, type_context}) =~
+               "Received: #{expected_type}."
+    end
+
     valid = Map.put(report, "absence_evidence", ["The capability was absent."])
     assert {:ok, _validated} = Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", valid))
 
@@ -643,7 +668,8 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     cases = [
       {Map.put(report, "authoritative_requirement", "The task contract requires it."), "prerequisite_resolution.authoritative_requirement"},
-      {Map.put(report, "alternatives", [Map.put(List.first(report["alternatives"]), "evidence", "Inspected evidence.")]), "prerequisite_resolution.alternatives[0].evidence"}
+      {Map.put(report, "alternatives", [Map.put(List.first(report["alternatives"]), "evidence", "Inspected evidence.")]), "prerequisite_resolution.alternatives[0].evidence"},
+      {Map.put(report, "alternatives", [Map.put(List.first(report["alternatives"]), "evidence", [1])]), "prerequisite_resolution.alternatives[0].evidence"}
     ]
 
     for {malformed_report, field_path} <- cases do
@@ -655,7 +681,13 @@ defmodule SymphonyElixir.RoleKernelTest do
       diagnostic = Lifecycle.correction_diagnostic({:invalid_prerequisite_list, field, context})
       assert diagnostic =~ "Invalid field: #{field_path}"
       assert diagnostic =~ "Expected: JSON array of non-empty strings."
-      assert diagnostic =~ "Received: JSON string."
+
+      if malformed_report["alternatives"] |> List.first() |> Map.get("evidence") == [1] do
+        assert diagnostic =~ "Received: JSON array."
+        assert diagnostic =~ "Keep the field as an array and make every item a non-empty JSON string."
+      else
+        assert diagnostic =~ "Received: JSON string."
+      end
     end
   end
 

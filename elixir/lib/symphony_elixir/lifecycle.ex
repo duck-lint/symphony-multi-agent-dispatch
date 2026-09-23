@@ -118,9 +118,6 @@ defmodule SymphonyElixir.Lifecycle do
         "JSON array" ->
           "Keep the field as an array and make every item a non-empty JSON string."
 
-        "missing" ->
-          "Add the field as a JSON array of non-empty strings."
-
         _ ->
           "Provide the field as a JSON array of non-empty strings."
       end
@@ -431,37 +428,24 @@ defmodule SymphonyElixir.Lifecycle do
   defp enrich_prerequisite_list_error(reason, _result), do: reason
 
   defp prerequisite_list_error_context(result, :alternative_evidence) do
-    alternatives = get_in(result, ["prerequisite_resolution", "alternatives"])
+    alternatives = Map.fetch!(Map.fetch!(result, "prerequisite_resolution"), "alternatives")
 
-    index =
-      if is_list(alternatives) do
-        Enum.find_index(alternatives, fn alternative ->
-          is_map(alternative) and not valid_string_list?(Map.get(alternative, "evidence"))
-        end)
-      end
+    {alternative, index} =
+      alternatives
+      |> Enum.with_index()
+      |> Enum.find(fn {alternative, _index} -> not valid_string_list?(Map.fetch!(alternative, "evidence")) end)
 
-    value =
-      if is_integer(index),
-        do: get_in(result, ["prerequisite_resolution", "alternatives", Access.at(index), "evidence"]),
-        else: :missing
+    value = Map.fetch!(alternative, "evidence")
 
     %{
-      field_path:
-        if(is_integer(index),
-          do: "prerequisite_resolution.alternatives[#{index}].evidence",
-          else: "prerequisite_resolution.alternatives[*].evidence"
-        ),
+      field_path: "prerequisite_resolution.alternatives[#{index}].evidence",
       actual_type: json_type(value)
     }
   end
 
   defp prerequisite_list_error_context(result, field) do
-    report = Map.get(result, "prerequisite_resolution", %{})
-
-    value =
-      if is_map(report) and Map.has_key?(report, Atom.to_string(field)),
-        do: report[Atom.to_string(field)],
-        else: :missing
+    report = Map.fetch!(result, "prerequisite_resolution")
+    value = Map.fetch!(report, Atom.to_string(field))
 
     %{
       field_path: prerequisite_field_path(field),
@@ -484,7 +468,6 @@ defmodule SymphonyElixir.Lifecycle do
   defp json_type(value) when is_map(value), do: "JSON object"
   defp json_type(value) when is_boolean(value), do: "JSON boolean"
   defp json_type(value) when is_number(value), do: "JSON number"
-  defp json_type(:missing), do: "missing"
   defp json_type(nil), do: "JSON null"
 
   defp validate_expected_role(result, expected_role) do
