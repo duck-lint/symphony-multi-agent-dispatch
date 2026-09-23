@@ -105,6 +105,17 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert prompt =~ "findings\" must be a JSON array"
       assert prompt =~ "exactly these keys:"
       assert prompt =~ "Finding \"evidence\" must be a JSON array of non-empty JSON strings"
+
+      if role in [:planner, :reviewer] do
+        assert prompt =~ "absence_evidence"
+        assert prompt =~ "authoritative_requirement"
+        assert prompt =~ "JSON array of non-empty"
+        assert prompt =~ "disposition"
+        assert prompt =~ "observed_unavailable"
+        assert prompt =~ "resolution_status"
+        assert prompt =~ "external_prerequisite"
+      end
+
       assert prompt =~ "Include \"human_question\" only when outcome is \"await_human\""
       assert prompt =~ "omit \"human_question\" or set it to JSON null"
       assert prompt =~ distinctive_behavior[role]
@@ -595,6 +606,107 @@ defmodule SymphonyElixir.RoleKernelTest do
 
     assert {:error, :role_result_not_a_map} = Lifecycle.decode_and_validate_result("[]", :reviewer)
     assert {:error, :invalid_role_result_output} = Lifecycle.decode_and_validate_result([], :reviewer)
+  end
+
+  test "prerequisite string lists reject strings and report actionable type diagnostics" do
+    report = prerequisite_report("resolved")
+    malformed = Map.put(report, "absence_evidence", "The capability was absent.")
+    result = Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", malformed)
+
+    assert {:error, {:invalid_prerequisite_list, :absence_evidence}} =
+             Lifecycle.validate_result(result)
+
+    assert {:error, {:invalid_prerequisite_list, :absence_evidence, context}} =
+             Lifecycle.decode_and_validate_result(Jason.encode!(result), :planner)
+
+    diagnostic = Lifecycle.correction_diagnostic({:invalid_prerequisite_list, :absence_evidence, context})
+
+    assert diagnostic =~ "Invalid field: prerequisite_resolution.absence_evidence"
+    assert diagnostic =~ "Expected: JSON array of non-empty strings."
+    assert diagnostic =~ "Received: JSON string."
+    assert diagnostic =~ "Preserve the factual evidence and serialize it as an array."
+
+    valid = Map.put(report, "absence_evidence", ["The capability was absent."])
+    assert {:ok, _validated} = Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", valid))
+
+    empty_lists =
+      report
+      |> Map.put("absence_evidence", [])
+      |> Map.put("authoritative_requirement", [])
+      |> Map.put("alternatives", [Map.put(List.first(report["alternatives"]), "evidence", [])])
+
+    assert {:ok, _validated} = Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", empty_lists))
+  end
+
+  test "all prerequisite string-list fields receive equivalent diagnostics" do
+    report = prerequisite_report("resolved")
+
+    cases = [
+      {Map.put(report, "authoritative_requirement", "The task contract requires it."), "prerequisite_resolution.authoritative_requirement"},
+      {Map.put(report, "alternatives", [Map.put(List.first(report["alternatives"]), "evidence", "Inspected evidence.")]), "prerequisite_resolution.alternatives[0].evidence"}
+    ]
+
+    for {malformed_report, field_path} <- cases do
+      result = Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", malformed_report)
+
+      assert {:error, {:invalid_prerequisite_list, field, context}} =
+               Lifecycle.decode_and_validate_result(Jason.encode!(result), :planner)
+
+      diagnostic = Lifecycle.correction_diagnostic({:invalid_prerequisite_list, field, context})
+      assert diagnostic =~ "Invalid field: #{field_path}"
+      assert diagnostic =~ "Expected: JSON array of non-empty strings."
+      assert diagnostic =~ "Received: JSON string."
+    end
+  end
+
+  test "planner correction diagnostics survive the retry path into the next prompt" do
+    ref = make_ref()
+    issue = %Issue{id: "issue-prerequisite-contract", identifier: "MT-PREREQUISITE", url: "https://example.test/issue-prerequisite-contract"}
+    malformed = Map.put(prerequisite_report("resolved"), "absence_evidence", "The capability was absent.")
+    result = Map.put(valid_result("PLANNER", "plan_ready"), "prerequisite_resolution", malformed)
+
+    assert {:error, {:invalid_prerequisite_list, :absence_evidence, context}} =
+             Lifecycle.decode_and_validate_result(Jason.encode!(result), :planner)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue.id => %{
+          ref: ref,
+          pid: self(),
+          identifier: issue.identifier,
+          issue: issue,
+          role: :planner,
+          correction_attempt: 0,
+          retry_attempt: 0,
+          worker_host: nil,
+          workspace_path: nil,
+          session_id: "session-prerequisite-contract",
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue.id]),
+      retry_attempts: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    {:noreply, state} =
+      Orchestrator.handle_info(
+        {:role_execution_failed, issue.id, %{kind: :role_result_contract, role: :planner, reason: {:invalid_role_result, {:invalid_prerequisite_list, :absence_evidence, context}}}},
+        state
+      )
+
+    {:noreply, state} = Orchestrator.handle_info({:DOWN, ref, :process, self(), :normal}, state)
+
+    feedback = state.retry_attempts[issue.id].correction_feedback
+    prompt = PromptBuilder.build_prompt(issue, :planner, %{correction_feedback: feedback})
+
+    assert prompt =~ "Invalid field: prerequisite_resolution.absence_evidence"
+    assert prompt =~ "Expected: JSON array of non-empty strings."
+    assert prompt =~ "Received: JSON string."
+    assert prompt =~ "Preserve the factual evidence and serialize it as an array."
+    assert state.retry_attempts[issue.id].correction_attempt == 1
+
+    Process.cancel_timer(state.retry_attempts[issue.id].timer_ref)
   end
 
   test "legal outcomes expose the canonical profile contract" do

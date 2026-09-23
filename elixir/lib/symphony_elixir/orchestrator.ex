@@ -10,6 +10,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.{
     AgentRunner,
     Config,
+    Lifecycle,
     LifecycleCoordinator,
     RoleRouter,
     StatusDashboard,
@@ -436,7 +437,7 @@ defmodule SymphonyElixir.Orchestrator do
         identifier: running_entry.identifier,
         issue_url: running_entry.issue.url,
         error: "#{label} result contract correction required: #{inspect(reason)}",
-        correction_feedback: inspect(reason),
+        correction_feedback: Lifecycle.correction_diagnostic(reason),
         correction_attempt: correction_attempt + 1,
         worker_host: Map.get(running_entry, :worker_host),
         workspace_path: Map.get(running_entry, :workspace_path)

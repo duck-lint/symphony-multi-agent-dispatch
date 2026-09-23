@@ -102,6 +102,44 @@ defmodule SymphonyElixir.Lifecycle do
   def decode_and_validate_result(_text, _expected_role),
     do: {:error, :invalid_role_result_output}
 
+  @spec correction_diagnostic(term()) :: String.t()
+  def correction_diagnostic({:invalid_role_result, reason}), do: correction_diagnostic(reason)
+
+  def correction_diagnostic({:invalid_prerequisite_list, field, context})
+      when is_atom(field) and is_map(context) do
+    field_path = Map.get(context, :field_path, prerequisite_field_path(field))
+    actual_type = Map.get(context, :actual_type, "unavailable")
+
+    correction =
+      case actual_type do
+        "JSON string" ->
+          "Preserve the factual evidence and serialize it as an array."
+
+        "JSON array" ->
+          "Keep the field as an array and make every item a non-empty JSON string."
+
+        "missing" ->
+          "Add the field as a JSON array of non-empty strings."
+
+        _ ->
+          "Provide the field as a JSON array of non-empty strings."
+      end
+
+    "Invalid field: #{field_path}\n\n" <>
+      "Expected: JSON array of non-empty strings.\n" <>
+      "Received: #{actual_type}.\n\n" <>
+      correction
+  end
+
+  def correction_diagnostic({:invalid_prerequisite_list, field}) when is_atom(field) do
+    "Invalid field: #{prerequisite_field_path(field)}\n\n" <>
+      "Expected: JSON array of non-empty strings.\n" <>
+      "Received: unavailable.\n\n" <>
+      "Provide the field as a JSON array of non-empty strings."
+  end
+
+  def correction_diagnostic(reason), do: inspect(reason)
+
   @spec transition(RoleProfiles.role(), String.t() | atom(), map()) ::
           {:ok, destination()} | {:error, term()}
   def transition(role, outcome, context \\ %{}) when is_map(context) do
@@ -371,6 +409,8 @@ defmodule SymphonyElixir.Lifecycle do
         with {:ok, validated_result} <- validate_result(result),
              :ok <- validate_expected_role(validated_result, expected_role) do
           {:ok, validated_result}
+        else
+          {:error, reason} -> {:error, enrich_prerequisite_list_error(reason, result)}
         end
 
       {:ok, _result} ->
@@ -380,6 +420,72 @@ defmodule SymphonyElixir.Lifecycle do
         {:error, {:role_result_json_decode_error, reason}}
     end
   end
+
+  # The public validator keeps its existing compact error identifiers. The
+  # decoded-result path additionally carries only the rejected field's JSON
+  # path and type so correction feedback can be actionable without echoing data.
+  defp enrich_prerequisite_list_error({:invalid_prerequisite_list, field}, result) do
+    {:invalid_prerequisite_list, field, prerequisite_list_error_context(result, field)}
+  end
+
+  defp enrich_prerequisite_list_error(reason, _result), do: reason
+
+  defp prerequisite_list_error_context(result, :alternative_evidence) do
+    alternatives = get_in(result, ["prerequisite_resolution", "alternatives"])
+
+    index =
+      if is_list(alternatives) do
+        Enum.find_index(alternatives, fn alternative ->
+          is_map(alternative) and not valid_string_list?(Map.get(alternative, "evidence"))
+        end)
+      end
+
+    value =
+      if is_integer(index),
+        do: get_in(result, ["prerequisite_resolution", "alternatives", Access.at(index), "evidence"]),
+        else: :missing
+
+    %{
+      field_path:
+        if(is_integer(index),
+          do: "prerequisite_resolution.alternatives[#{index}].evidence",
+          else: "prerequisite_resolution.alternatives[*].evidence"
+        ),
+      actual_type: json_type(value)
+    }
+  end
+
+  defp prerequisite_list_error_context(result, field) do
+    report = Map.get(result, "prerequisite_resolution", %{})
+
+    value =
+      if is_map(report) and Map.has_key?(report, Atom.to_string(field)),
+        do: report[Atom.to_string(field)],
+        else: :missing
+
+    %{
+      field_path: prerequisite_field_path(field),
+      actual_type: json_type(value)
+    }
+  end
+
+  defp prerequisite_field_path(:absence_evidence), do: "prerequisite_resolution.absence_evidence"
+  defp prerequisite_field_path(:authoritative_requirement), do: "prerequisite_resolution.authoritative_requirement"
+  defp prerequisite_field_path(:alternative_evidence), do: "prerequisite_resolution.alternatives[*].evidence"
+  defp prerequisite_field_path(field), do: "prerequisite_resolution.#{field}"
+
+  defp valid_string_list?(value) when is_list(value),
+    do: Enum.all?(value, &(is_binary(&1) and String.trim(&1) != ""))
+
+  defp valid_string_list?(_value), do: false
+
+  defp json_type(value) when is_binary(value), do: "JSON string"
+  defp json_type(value) when is_list(value), do: "JSON array"
+  defp json_type(value) when is_map(value), do: "JSON object"
+  defp json_type(value) when is_boolean(value), do: "JSON boolean"
+  defp json_type(value) when is_number(value), do: "JSON number"
+  defp json_type(:missing), do: "missing"
+  defp json_type(nil), do: "JSON null"
 
   defp validate_expected_role(result, expected_role) do
     with {:ok, canonical_expected_role} <- canonical_role(expected_role) do

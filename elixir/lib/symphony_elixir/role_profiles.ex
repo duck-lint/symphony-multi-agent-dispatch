@@ -421,11 +421,22 @@ defmodule SymphonyElixir.RoleProfiles do
     PLANNER and REVIEWER may include "prerequisite_resolution" only when a prerequisite blocks
     feasibility. It must be an object with exactly these keys: "blocked_objective",
     "missing_prerequisite", "absence_evidence", "authoritative_requirement", "alternatives",
-    "authority_status", "unlock_action", and "resolution_status". "alternatives" must list
-    each material alternative with exactly "approach", "evidence", and "disposition"; do not
-    treat an unexamined or inaccessible alternative as demonstrated infeasible. The report is
-    evidence for host validation, not routing authority. Omit the field or set it to JSON null
-    when no prerequisite blocks the role's result.
+    "authority_status", "unlock_action", and "resolution_status". "blocked_objective",
+    "missing_prerequisite", and "unlock_action" must each be a non-empty JSON string.
+    "absence_evidence" and "authoritative_requirement" must each be a JSON array of non-empty
+    JSON strings; either array may be empty. "alternatives" must be a non-empty JSON array of
+    objects. Each alternative object must contain exactly "approach", "evidence", and
+    "disposition". "approach" must be a non-empty JSON string. "evidence" must be a JSON array
+    of non-empty JSON strings and may be empty. "disposition" must be exactly one of the JSON
+    strings "available", "observed_unavailable", "demonstrated_infeasible", "unauthorized",
+    "unexamined", or "inaccessible". "authority_status" must be exactly one of the JSON
+    strings "within_existing_authority", "requires_external_action",
+    "not_resolvable_with_existing_authority", or "not_established". "resolution_status" must
+    be exactly one of the JSON strings "resolved", "unresolved", "external_prerequisite", or
+    "no_feasible_authorized_path_established". Do not treat an unexamined or inaccessible
+    alternative as demonstrated infeasible. The report is evidence for host validation, not
+    routing authority. Omit the field or set it to JSON null when no prerequisite blocks the
+    role result. Roles other than PLANNER and REVIEWER must omit it or set it to JSON null.
     Include "human_question" only when outcome is "await_human", and then it must be a non-empty
     JSON string. For every other outcome, omit "human_question" or set it to JSON null.
     """
