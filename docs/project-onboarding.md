@@ -265,6 +265,66 @@ symphony:state:blocked
 symphony:state:lifecycle-complete
 symphony:state:non-converged
 ```
+```
+set -a
+source ~/.config/symphony/credentials.env
+set +a
+
+python3 - <<'PY'
+import json
+import os
+import urllib.request
+import urllib.error
+
+repo = "<<<your_project_repo_here>>>"
+token = os.environ["SYMPHONY_GITHUB_TOKEN"]
+
+labels = [
+    ("symphony:auto", "Eligible for SYMPHONY autonomous lifecycle", "5319e7"),
+    ("symphony:role:pm", "Current SYMPHONY role: PM", "8250df"),
+    ("symphony:role:planner", "Current SYMPHONY role: Planner", "8250df"),
+    ("symphony:role:reviewer", "Current SYMPHONY role: Reviewer", "8250df"),
+    ("symphony:role:implementer", "Current SYMPHONY role: Implementer", "8250df"),
+    ("symphony:role:adversary", "Current SYMPHONY role: Adversary", "8250df"),
+    ("symphony:role:archivist", "Current SYMPHONY role: Archivist", "8250df"),
+    ("symphony:state:awaiting-human", "SYMPHONY requires human input", "fbca04"),
+    ("symphony:state:blocked", "SYMPHONY lifecycle blocked", "d73a4a"),
+    ("symphony:state:lifecycle-complete", "SYMPHONY lifecycle completed", "0e8a16"),
+    ("symphony:state:non-converged", "SYMPHONY lifecycle exhausted without convergence", "b60205"),
+]
+
+url = f"https://api.github.com/repos/{repo}/labels"
+
+for name, description, color in labels:
+    body = json.dumps({
+        "name": name,
+        "description": description,
+        "color": color,
+    }).encode()
+
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req) as response:
+            print(f"created: {name}")
+    except urllib.error.HTTPError as e:
+        if e.code == 422:
+            print(f"already exists: {name}")
+        else:
+            print(f"FAILED {name}: HTTP {e.code} {e.read().decode()}")
+PY
+```
+
 
 The host only performs bounded add/remove operations for labels on the current
 issue and verifies its lifecycle projection. It does not create the complete
