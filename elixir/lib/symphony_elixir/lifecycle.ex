@@ -55,7 +55,7 @@ defmodule SymphonyElixir.Lifecycle do
          :ok <- validate_schema(Map.get(result, "schema")),
          {:ok, role} <- validate_result_role(Map.get(result, "role")),
          {:ok, outcome} <- validate_result_outcome(role, Map.get(result, "outcome")),
-         :ok <- validate_summary(Map.get(result, "summary")),
+         :ok <- validate_summary(role, Map.get(result, "summary")),
          :ok <- validate_evidence(Map.get(result, "evidence")),
          :ok <- validate_findings(Map.get(result, "findings")),
          :ok <- validate_prerequisite_resolution(role, Map.get(result, "prerequisite_resolution")),
@@ -103,10 +103,62 @@ defmodule SymphonyElixir.Lifecycle do
     do: {:error, :invalid_role_result_output}
 
   @spec correction_diagnostic(term()) :: String.t()
-  def correction_diagnostic({:invalid_role_result, reason}), do: correction_diagnostic(reason)
+  def correction_diagnostic(reason), do: correction_diagnostic(reason, nil)
 
-  def correction_diagnostic({:invalid_prerequisite_list, field, context})
-      when is_atom(field) and is_map(context) do
+  @spec correction_diagnostic(term(), map() | nil) :: String.t()
+  def correction_diagnostic(reason, revision_state) do
+    reason
+    |> correction_diagnostic_base()
+    |> append_revision_correction_state(revision_state)
+  end
+
+  defp correction_diagnostic_base({:invalid_role_result, reason}), do: correction_diagnostic_base(reason)
+
+  defp correction_diagnostic_base({:role_result_summary_too_long, context}) when is_map(context) do
+    role_name = context |> Map.get(:role, "role") |> role_display_name()
+    expected_maximum = Map.get(context, :expected_maximum, "unknown")
+    actual_length = Map.get(context, :actual_length, "unknown")
+
+    "`summary` exceeded the #{role_name} result limit.\n\n" <>
+      "Expected maximum: #{expected_maximum} characters.\n" <>
+      "Received: #{actual_length} characters.\n\n" <>
+      "Shorten the plan while preserving all required revision findings and exact plan excerpts."
+  end
+
+  defp correction_diagnostic_base({:invalid_revision_plan_excerpt, {:excerpt_not_in_plan_summary, details}})
+       when is_map(details) do
+    failures = Map.get(details, :failed, [])
+    passed = Map.get(details, :passed_finding_refs, [])
+
+    failure_text =
+      Enum.map_join(failures, "\n\n", fn failure ->
+        "Invalid field: #{failure.field_path}\n" <>
+          "Requirement: #{failure.requirement}\n" <>
+          "Received excerpt: #{inspect(failure.supplied_excerpt)}\n" <>
+          "The supplied excerpt does not occur exactly in `summary`."
+      end)
+
+    passed_text =
+      case passed do
+        [] -> "No finding excerpts passed exact-substring provenance on this attempt."
+        refs -> "Finding excerpts that passed exact-substring provenance on this attempt: #{Enum.join(refs, ", ")}."
+      end
+
+    "Revision excerpt provenance failure(s):\n\n" <>
+      failure_text <>
+      "\n\n" <>
+      passed_text <>
+      "\n\nCorrection: Copy an exact contiguous substring from the corrected plan in `summary`, " <>
+      "or revise `summary` so the cited correction appears there. Do not paraphrase the excerpt."
+  end
+
+  defp correction_diagnostic_base({:invalid_revision_plan_excerpt, _details}) do
+    "Revision excerpt provenance failed. For `plan_ready`, each `plan_excerpt` must be a " <>
+      "verbatim contiguous substring of the current result `summary`. Copy an exact substring; do not paraphrase it."
+  end
+
+  defp correction_diagnostic_base({:invalid_prerequisite_list, field, context})
+       when is_atom(field) and is_map(context) do
     field_path = Map.get(context, :field_path, prerequisite_field_path(field))
     actual_type = Map.get(context, :actual_type, "unavailable")
 
@@ -128,14 +180,60 @@ defmodule SymphonyElixir.Lifecycle do
       correction
   end
 
-  def correction_diagnostic({:invalid_prerequisite_list, field}) when is_atom(field) do
+  defp correction_diagnostic_base({:invalid_prerequisite_list, field}) when is_atom(field) do
     "Invalid field: #{prerequisite_field_path(field)}\n\n" <>
       "Expected: JSON array of non-empty strings.\n" <>
       "Received: unavailable.\n\n" <>
       "Provide the field as a JSON array of non-empty strings."
   end
 
-  def correction_diagnostic(reason), do: inspect(reason)
+  defp correction_diagnostic_base(reason), do: inspect(reason)
+
+  defp append_revision_correction_state(diagnostic, nil), do: diagnostic
+
+  defp append_revision_correction_state(diagnostic, state) when is_map(state) do
+    identity = Map.get(state, :identity, %{})
+    attempts = Map.get(state, :attempts, [])
+    passed = Map.get(state, :passed_finding_refs, [])
+    failed = Map.get(state, :currently_failed_finding_refs, [])
+    summary_failures = Map.get(state, :summary_length_failures, [])
+
+    attempt_text =
+      Enum.map_join(attempts, "\n", fn attempt ->
+        passed_text = format_refs(Map.get(attempt, :passed_finding_refs, []))
+        failed_text = format_refs(Map.get(attempt, :failed_finding_refs, []))
+
+        summary_text =
+          case {Map.get(attempt, :summary_length), Map.get(attempt, :summary_limit)} do
+            {length, limit} when is_integer(length) and is_integer(limit) -> "; summary #{length}/#{limit} characters"
+            _ -> ""
+          end
+
+        "- Attempt #{Map.get(attempt, :attempt, "?")}: passed excerpts [#{passed_text}]; " <>
+          "failed excerpts [#{failed_text}]#{summary_text}"
+      end)
+
+    summary_failure_text =
+      case summary_failures do
+        [] -> "none"
+        failures -> Enum.map_join(failures, "; ", &"attempt #{&1.attempt}: #{&1.actual_length}/#{&1.expected_maximum} characters")
+      end
+
+    diagnostic <>
+      "\n\nAggregate revision correction state for this episode (mechanical checks only; not semantic approval):\n" <>
+      "Episode identity: #{inspect(identity)}\n" <>
+      "Prior correction trace:\n#{attempt_text}\n" <>
+      "Mechanically passed finding refs retained: #{format_refs(passed)}\n" <>
+      "Currently failing finding refs: #{format_refs(failed)}\n" <>
+      "Summary-length failures: #{summary_failure_text}\n" <>
+      "Preserve mechanically valid excerpt provenance where possible. A passed excerpt is not semantic resolution; the Reviewer remains the semantic authority."
+  end
+
+  defp format_refs([]), do: "none"
+  defp format_refs(refs), do: Enum.join(refs, ", ")
+
+  defp role_display_name(role) when is_binary(role), do: String.capitalize(String.downcase(role))
+  defp role_display_name(role), do: inspect(role)
 
   @spec transition(RoleProfiles.role(), String.t() | atom(), map()) ::
           {:ok, destination()} | {:error, term()}
@@ -407,7 +505,7 @@ defmodule SymphonyElixir.Lifecycle do
              :ok <- validate_expected_role(validated_result, expected_role) do
           {:ok, validated_result}
         else
-          {:error, reason} -> {:error, enrich_prerequisite_list_error(reason, result)}
+          {:error, reason} -> {:error, enrich_validation_error(reason, result)}
         end
 
       {:ok, _result} ->
@@ -421,6 +519,12 @@ defmodule SymphonyElixir.Lifecycle do
   # The public validator keeps its existing compact error identifiers. The
   # decoded-result path additionally carries only the rejected field's JSON
   # path and type so correction feedback can be actionable without echoing data.
+  defp enrich_validation_error(:role_result_summary_too_long, result) do
+    {:role_result_summary_too_long, summary_limit_context(result)}
+  end
+
+  defp enrich_validation_error(reason, result), do: enrich_prerequisite_list_error(reason, result)
+
   defp enrich_prerequisite_list_error({:invalid_prerequisite_list, field}, result) do
     {:invalid_prerequisite_list, field, prerequisite_list_error_context(result, field)}
   end
@@ -453,6 +557,69 @@ defmodule SymphonyElixir.Lifecycle do
     }
   end
 
+  defp summary_limit_context(result) do
+    role = role_for_result_name(result["role"])
+
+    %{
+      role: result["role"],
+      expected_maximum: RoleProfiles.role_result_summary_max_length(role),
+      actual_length: String.length(result["summary"]),
+      revision_observation: revision_mechanical_observation(result)
+    }
+  end
+
+  defp role_for_result_name(role_name) do
+    Enum.find(RoleProfiles.roles(), :pm, &(RoleProfiles.role_name(&1) == role_name))
+  end
+
+  defp revision_mechanical_observation(%{
+         "role" => "PLANNER",
+         "outcome" => "plan_ready",
+         "summary" => summary,
+         "revision_reconciliation" => %{"finding_responses" => responses}
+       })
+       when is_binary(summary) and is_list(responses) do
+    checks =
+      Enum.map(responses, fn response ->
+        excerpt = Map.get(response, "plan_excerpt")
+        valid? = is_binary(excerpt) and String.trim(excerpt) != "" and String.contains?(summary, excerpt)
+
+        %{finding_ref: Map.get(response, "finding_ref"), excerpt: excerpt, valid?: valid?}
+      end)
+
+    %{
+      summary_length: String.length(summary),
+      summary_limit: RoleProfiles.role_result_summary_max_length(:planner),
+      passed_finding_refs: checks |> Enum.filter(& &1.valid?) |> Enum.map(& &1.finding_ref),
+      failed:
+        checks
+        |> Enum.reject(& &1.valid?)
+        |> Enum.map(fn check ->
+          %{
+            finding_ref: check.finding_ref,
+            field_path: revision_excerpt_field_path(check.finding_ref),
+            supplied_excerpt: bounded_excerpt(check.excerpt),
+            requirement: "For plan_ready, plan_excerpt must be a verbatim contiguous substring of summary."
+          }
+        end)
+    }
+  end
+
+  defp revision_mechanical_observation(_result), do: nil
+
+  defp revision_excerpt_field_path(finding_ref),
+    do: "revision_reconciliation.finding_responses[finding_ref=#{inspect(finding_ref)}].plan_excerpt"
+
+  defp bounded_excerpt(excerpt) when is_binary(excerpt) do
+    if String.length(excerpt) > 1_000 do
+      String.slice(excerpt, 0, 1_000) <> "… [truncated]"
+    else
+      excerpt
+    end
+  end
+
+  defp bounded_excerpt(excerpt), do: inspect(excerpt)
+
   defp prerequisite_field_path(:absence_evidence), do: "prerequisite_resolution.absence_evidence"
   defp prerequisite_field_path(:authoritative_requirement), do: "prerequisite_resolution.authoritative_requirement"
   defp prerequisite_field_path(:alternative_evidence), do: "prerequisite_resolution.alternatives[*].evidence"
@@ -482,12 +649,12 @@ defmodule SymphonyElixir.Lifecycle do
     end
   end
 
-  defp validate_summary(summary) when is_binary(summary) do
+  defp validate_summary(role, summary) when is_binary(summary) do
     cond do
       String.trim(summary) == "" ->
         {:error, :empty_role_result_summary}
 
-      String.length(summary) > RoleProfiles.role_result_summary_max_length() ->
+      String.length(summary) > RoleProfiles.role_result_summary_max_length(role) ->
         {:error, :role_result_summary_too_long}
 
       true ->
@@ -495,7 +662,7 @@ defmodule SymphonyElixir.Lifecycle do
     end
   end
 
-  defp validate_summary(_summary), do: {:error, :invalid_role_result_summary}
+  defp validate_summary(_role, _summary), do: {:error, :invalid_role_result_summary}
 
   defp lifecycle_transition_context(state) do
     prerequisite = prerequisite_context(state)

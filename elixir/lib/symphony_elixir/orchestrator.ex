@@ -377,7 +377,8 @@ defmodule SymphonyElixir.Orchestrator do
       worker_host: Map.get(running_entry, :worker_host),
       workspace_path: Map.get(running_entry, :workspace_path),
       correction_feedback: Map.get(running_entry, :correction_feedback),
-      correction_attempt: Map.get(running_entry, :correction_attempt, 0)
+      correction_attempt: Map.get(running_entry, :correction_attempt, 0),
+      revision_correction_state: Map.get(running_entry, :revision_correction_state)
     })
   end
 
@@ -411,6 +412,9 @@ defmodule SymphonyElixir.Orchestrator do
 
     correction_attempt = Map.get(running_entry, :correction_attempt, 0)
 
+    revision_correction_state =
+      update_revision_correction_state(running_entry, reason, correction_attempt + 1)
+
     if correction_attempt >= max_corrections do
       diagnostic =
         "#{label} result remained outside the #{contract_name} after #{max_corrections} corrections " <>
@@ -437,13 +441,158 @@ defmodule SymphonyElixir.Orchestrator do
         identifier: running_entry.identifier,
         issue_url: running_entry.issue.url,
         error: "#{label} result contract correction required: #{inspect(reason)}",
-        correction_feedback: Lifecycle.correction_diagnostic(reason),
+        correction_feedback: Lifecycle.correction_diagnostic(reason, revision_correction_state),
         correction_attempt: correction_attempt + 1,
+        revision_correction_state: revision_correction_state,
         worker_host: Map.get(running_entry, :worker_host),
         workspace_path: Map.get(running_entry, :workspace_path)
       })
     end
   end
+
+  defp revision_episode_from_handoff(%{
+         lifecycle_id: lifecycle_id,
+         round: round,
+         planning_attempt: planning_attempt,
+         revision_reconciliation: projection
+       })
+       when is_binary(lifecycle_id) and is_integer(round) and is_integer(planning_attempt) and
+              is_map(projection) do
+    rejected_planner = Map.get(projection, :rejected_planner)
+    reviewer = Map.get(projection, :reviewer)
+    rejected_planner_transition_id = if is_map(rejected_planner), do: rejected_planner["transition_id"]
+    reviewer_transition_id = if is_map(reviewer), do: reviewer["transition_id"]
+
+    if is_binary(rejected_planner_transition_id) and is_binary(reviewer_transition_id) do
+      %{
+        lifecycle_id: lifecycle_id,
+        round: round,
+        planning_attempt: planning_attempt,
+        rejected_planner_transition_id: rejected_planner_transition_id,
+        reviewer_transition_id: reviewer_transition_id
+      }
+    end
+  end
+
+  defp revision_episode_from_handoff(_handoff), do: nil
+
+  defp revision_episode_matches?(%{identity: identity}, episode)
+       when is_map(identity) and is_map(episode),
+       do: identity == episode
+
+  defp revision_episode_matches?(_state, _episode), do: false
+
+  defp update_revision_correction_state(running_entry, reason, attempt)
+       when is_map(running_entry) and is_integer(attempt) do
+    episode = Map.get(running_entry, :revision_episode)
+
+    if Map.get(running_entry, :role) == :planner and is_map(episode) do
+      previous = prior_revision_correction_state(running_entry, episode)
+      observation = revision_observation_from_reason(reason)
+      build_revision_correction_state(previous, episode, observation, reason, attempt)
+    end
+  end
+
+  defp prior_revision_correction_state(running_entry, episode) do
+    case Map.get(running_entry, :revision_correction_state) do
+      state when is_map(state) ->
+        if Map.get(state, :identity) == episode, do: state, else: empty_revision_correction_state(episode)
+
+      _ ->
+        empty_revision_correction_state(episode)
+    end
+  end
+
+  defp build_revision_correction_state(previous, episode, observation, reason, attempt) do
+    passed = Map.get(observation, :passed_finding_refs, [])
+    failed = Map.get(observation, :failed_finding_refs, [])
+    summary_length = Map.get(observation, :summary_length)
+    summary_limit = Map.get(observation, :summary_limit)
+
+    attempt_entry = %{
+      attempt: attempt,
+      rejection_reason: revision_rejection_kind(reason),
+      passed_finding_refs: passed,
+      failed_finding_refs: failed,
+      summary_length: summary_length,
+      summary_limit: summary_limit
+    }
+
+    %{
+      identity: episode,
+      attempts:
+        (Map.get(previous, :attempts, []) ++ [attempt_entry])
+        |> Enum.take(-@max_planner_contract_corrections),
+      passed_finding_refs: (Map.get(previous, :passed_finding_refs, []) ++ passed) |> Enum.uniq(),
+      currently_failed_finding_refs: current_failed_finding_refs(previous, failed),
+      summary_length_failures: append_summary_length_failure(previous, attempt, summary_length, summary_limit)
+    }
+  end
+
+  defp current_failed_finding_refs(previous, []),
+    do: Map.get(previous, :currently_failed_finding_refs, [])
+
+  defp current_failed_finding_refs(_previous, failed), do: failed
+
+  defp append_summary_length_failure(previous, attempt, summary_length, summary_limit)
+       when is_integer(summary_length) and is_integer(summary_limit) do
+    previous
+    |> Map.get(:summary_length_failures, [])
+    |> Kernel.++([%{attempt: attempt, actual_length: summary_length, expected_maximum: summary_limit}])
+    |> Enum.take(-@max_planner_contract_corrections)
+  end
+
+  defp append_summary_length_failure(previous, _attempt, _summary_length, _summary_limit),
+    do: Map.get(previous, :summary_length_failures, [])
+
+  defp empty_revision_correction_state(episode) do
+    %{
+      identity: episode,
+      attempts: [],
+      passed_finding_refs: [],
+      currently_failed_finding_refs: [],
+      summary_length_failures: []
+    }
+  end
+
+  defp revision_rejection_kind({:invalid_role_result, reason}),
+    do: revision_rejection_kind(reason)
+
+  defp revision_rejection_kind({:invalid_revision_plan_excerpt, _details}),
+    do: :invalid_revision_plan_excerpt
+
+  defp revision_rejection_kind({:role_result_summary_too_long, _context}),
+    do: :role_result_summary_too_long
+
+  defp revision_rejection_kind(_reason), do: :other_role_result_contract_error
+
+  defp revision_observation_from_reason({:invalid_role_result, reason}),
+    do: revision_observation_from_reason(reason)
+
+  defp revision_observation_from_reason({:invalid_revision_plan_excerpt, {:excerpt_not_in_plan_summary, details}})
+       when is_map(details) do
+    failed = Map.get(details, :failed, [])
+
+    %{
+      passed_finding_refs: Map.get(details, :passed_finding_refs, []),
+      failed_finding_refs: Enum.map(failed, &Map.get(&1, :finding_ref))
+    }
+  end
+
+  defp revision_observation_from_reason({:role_result_summary_too_long, context})
+       when is_map(context) do
+    observation = Map.get(context, :revision_observation, %{})
+    failed = Map.get(observation, :failed, [])
+
+    %{
+      passed_finding_refs: Map.get(observation, :passed_finding_refs, []),
+      failed_finding_refs: Enum.map(failed, &Map.get(&1, :finding_ref)),
+      summary_length: Map.get(context, :actual_length),
+      summary_limit: Map.get(context, :expected_maximum)
+    }
+  end
+
+  defp revision_observation_from_reason(_reason), do: %{}
 
   defp maybe_dispatch(%State{} = state) do
     state =
@@ -858,7 +1007,8 @@ defmodule SymphonyElixir.Orchestrator do
           issue_url: running_entry.issue.url,
           error: "stalled for #{elapsed_ms}ms without codex activity",
           correction_feedback: Map.get(running_entry, :correction_feedback),
-          correction_attempt: Map.get(running_entry, :correction_attempt, 0)
+          correction_attempt: Map.get(running_entry, :correction_attempt, 0),
+          revision_correction_state: Map.get(running_entry, :revision_correction_state)
         })
       end
     else
@@ -1155,7 +1305,8 @@ defmodule SymphonyElixir.Orchestrator do
          attempt \\ nil,
          preferred_worker_host \\ nil,
          correction_feedback \\ nil,
-         correction_attempt \\ 0
+         correction_attempt \\ 0,
+         revision_correction_state \\ nil
        ) do
     case refresh_issue_for_dispatch(issue) do
       {:ok, %Issue{} = refreshed_issue} ->
@@ -1165,7 +1316,8 @@ defmodule SymphonyElixir.Orchestrator do
           attempt,
           preferred_worker_host,
           correction_feedback,
-          correction_attempt
+          correction_attempt,
+          revision_correction_state
         )
 
       {:skip, _reason} ->
@@ -1202,7 +1354,8 @@ defmodule SymphonyElixir.Orchestrator do
          attempt,
          preferred_worker_host,
          correction_feedback,
-         correction_attempt
+         correction_attempt,
+         revision_correction_state
        ) do
     case LifecycleCoordinator.prepare_dispatch(issue) do
       {:skip, reason} ->
@@ -1221,8 +1374,11 @@ defmodule SymphonyElixir.Orchestrator do
           lifecycle_context,
           attempt,
           preferred_worker_host,
-          correction_feedback,
-          correction_attempt
+          %{
+            correction_feedback: correction_feedback,
+            correction_attempt: correction_attempt,
+            revision_correction_state: revision_correction_state
+          }
         )
     end
   end
@@ -1234,9 +1390,18 @@ defmodule SymphonyElixir.Orchestrator do
          lifecycle_context,
          attempt,
          preferred_worker_host,
-         correction_feedback,
-         correction_attempt
+         correction_context
        ) do
+    correction_feedback = Map.get(correction_context, :correction_feedback)
+    correction_attempt = Map.get(correction_context, :correction_attempt, 0)
+    revision_correction_state = Map.get(correction_context, :revision_correction_state)
+    revision_episode = revision_episode_from_handoff(handoff)
+
+    revision_correction_state =
+      if revision_episode_matches?(revision_correction_state, revision_episode),
+        do: revision_correction_state,
+        else: nil
+
     case role_profile_for_dispatch(issue) do
       {:error, reason} ->
         Logger.warning("Skipping dispatch for #{issue_context(issue)}; invalid lifecycle role state: #{inspect(reason)}")
@@ -1265,7 +1430,9 @@ defmodule SymphonyElixir.Orchestrator do
               handoff: handoff,
               lifecycle_context: lifecycle_context,
               correction_feedback: correction_feedback,
-              correction_attempt: correction_attempt
+              correction_attempt: correction_attempt,
+              revision_episode: revision_episode,
+              revision_correction_state: revision_correction_state
             })
         end
     end
@@ -1281,7 +1448,9 @@ defmodule SymphonyElixir.Orchestrator do
       handoff: handoff,
       lifecycle_context: lifecycle_context,
       correction_feedback: correction_feedback,
-      correction_attempt: correction_attempt
+      correction_attempt: correction_attempt,
+      revision_episode: revision_episode,
+      revision_correction_state: revision_correction_state
     } = dispatch
 
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
@@ -1329,6 +1498,8 @@ defmodule SymphonyElixir.Orchestrator do
             turn_count: 0,
             correction_attempt: correction_attempt,
             correction_feedback: correction_feedback,
+            revision_episode: revision_episode,
+            revision_correction_state: revision_correction_state,
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now()
           })
@@ -1350,7 +1521,9 @@ defmodule SymphonyElixir.Orchestrator do
           error: "failed to spawn agent: #{inspect(reason)}",
           worker_host: worker_host,
           correction_feedback: correction_feedback,
-          correction_attempt: correction_attempt
+          correction_attempt: correction_attempt,
+          revision_episode: revision_episode,
+          revision_correction_state: revision_correction_state
         })
     end
   end
@@ -1413,7 +1586,8 @@ defmodule SymphonyElixir.Orchestrator do
             worker_host: worker_host,
             workspace_path: workspace_path,
             correction_feedback: Map.get(metadata, :correction_feedback),
-            correction_attempt: Map.get(metadata, :correction_attempt, 0)
+            correction_attempt: Map.get(metadata, :correction_attempt, 0),
+            revision_correction_state: Map.get(metadata, :revision_correction_state)
           })
     }
   end
@@ -1428,7 +1602,8 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: Map.get(retry_entry, :worker_host),
           workspace_path: Map.get(retry_entry, :workspace_path),
           correction_feedback: Map.get(retry_entry, :correction_feedback),
-          correction_attempt: Map.get(retry_entry, :correction_attempt, 0)
+          correction_attempt: Map.get(retry_entry, :correction_attempt, 0),
+          revision_correction_state: Map.get(retry_entry, :revision_correction_state)
         }
 
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
@@ -1539,7 +1714,8 @@ defmodule SymphonyElixir.Orchestrator do
              attempt,
              metadata[:worker_host],
              metadata[:correction_feedback],
-             metadata[:correction_attempt] || 0
+             metadata[:correction_attempt] || 0,
+             metadata[:revision_correction_state]
            )}
 
         {:skip, :missing} ->

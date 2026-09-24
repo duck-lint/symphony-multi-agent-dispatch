@@ -278,6 +278,47 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert length(history.events) == length(planner_revision_events(lifecycle_id))
   end
 
+  test "Planner revision excerpt validation reports every failed finding and preserves strict matching" do
+    lifecycle_id = "planner-revision-excerpt-diagnostics"
+    install_planner_revision_history(planner_revision_events(lifecycle_id))
+
+    assert {:ok, %{handoff: %{revision_reconciliation: projection}}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    result = planner_revision_result(projection, "Install exact command. Verify independently.")
+
+    responses = result["revision_reconciliation"]["finding_responses"]
+
+    result =
+      put_in(
+        result,
+        ["revision_reconciliation", "finding_responses"],
+        [
+          Map.put(Enum.at(responses, 0), "plan_excerpt", "not present in summary"),
+          Map.put(Enum.at(responses, 1), "plan_excerpt", "Verify independently.")
+        ]
+      )
+
+    assert {:error, {:invalid_revision_plan_excerpt, {:excerpt_not_in_plan_summary, details}}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, result)
+
+    assert details.passed_finding_refs == [Enum.at(projection.reviewer_findings, 1)["finding_ref"]]
+    assert [failure] = details.failed
+    assert failure.finding_ref == Enum.at(projection.reviewer_findings, 0)["finding_ref"]
+    assert failure.field_path =~ "revision_reconciliation.finding_responses[finding_ref="
+    assert failure.field_path =~ ".plan_excerpt"
+    assert failure.supplied_excerpt == "not present in summary"
+    assert failure.requirement =~ "verbatim contiguous substring"
+
+    near_match = Map.put(result, "summary", "Install exact command Verify independently.")
+    near_match = put_in(near_match, ["revision_reconciliation", "finding_responses", Access.at(0), "plan_excerpt"], "Install exact command.")
+
+    assert {:error, {:invalid_revision_plan_excerpt, {:excerpt_not_in_plan_summary, details}}} =
+             LifecycleCoordinator.commit_role_result(github_issue(), :planner, near_match)
+
+    assert length(details.failed) == 1
+  end
+
   test "complete Planner reconciliation persists, replays, and reaches Reviewer without semantic approval" do
     lifecycle_id = "planner-revision-valid"
     install_planner_revision_history(planner_revision_events(lifecycle_id))

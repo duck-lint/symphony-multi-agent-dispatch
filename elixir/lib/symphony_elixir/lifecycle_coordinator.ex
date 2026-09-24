@@ -804,18 +804,32 @@ defmodule SymphonyElixir.LifecycleCoordinator do
        when is_list(responses) do
     plan_text = result["summary"]
 
-    cond do
-      not is_binary(plan_text) ->
-        {:error, {:invalid_revision_plan_excerpt, :planner_summary_not_text}}
+    if is_binary(plan_text) do
+      checks =
+        Enum.map(responses, fn response ->
+          excerpt = response["plan_excerpt"]
+          valid? = is_binary(excerpt) and String.trim(excerpt) != "" and String.contains?(plan_text, excerpt)
+          %{response: response, valid?: valid?}
+        end)
 
-      Enum.any?(responses, fn response ->
-        excerpt = response["plan_excerpt"]
-        not (is_binary(excerpt) and String.trim(excerpt) != "" and String.contains?(plan_text, excerpt))
-      end) ->
-        {:error, {:invalid_revision_plan_excerpt, :excerpt_not_in_plan_summary}}
+      case Enum.filter(checks, &(not &1.valid?)) do
+        [] ->
+          :ok
 
-      true ->
-        :ok
+        failed_checks ->
+          {:error,
+           {:invalid_revision_plan_excerpt,
+            {:excerpt_not_in_plan_summary,
+             %{
+               failed: Enum.map(failed_checks, &revision_excerpt_failure/1),
+               passed_finding_refs:
+                 checks
+                 |> Enum.filter(& &1.valid?)
+                 |> Enum.map(& &1.response["finding_ref"])
+             }}}}
+      end
+    else
+      {:error, {:invalid_revision_plan_excerpt, :planner_summary_not_text}}
     end
   end
 
@@ -828,6 +842,32 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
   defp validate_revision_plan_excerpts(_result, _responses),
     do: {:error, :invalid_revision_plan_excerpt}
+
+  @revision_excerpt_diagnostic_limit 1_000
+
+  defp revision_excerpt_failure(%{response: response}) do
+    finding_ref = response["finding_ref"]
+
+    %{
+      finding_ref: finding_ref,
+      field_path: revision_excerpt_field_path(finding_ref),
+      supplied_excerpt: bounded_excerpt(response["plan_excerpt"]),
+      requirement: "For plan_ready, plan_excerpt must be a verbatim contiguous substring of the current result summary."
+    }
+  end
+
+  defp revision_excerpt_field_path(finding_ref),
+    do: "revision_reconciliation.finding_responses[finding_ref=#{inspect(finding_ref)}].plan_excerpt"
+
+  defp bounded_excerpt(excerpt) when is_binary(excerpt) do
+    if String.length(excerpt) > @revision_excerpt_diagnostic_limit do
+      String.slice(excerpt, 0, @revision_excerpt_diagnostic_limit) <> "… [truncated]"
+    else
+      excerpt
+    end
+  end
+
+  defp bounded_excerpt(excerpt), do: inspect(excerpt)
 
   defp validate_pm_reconciliation(history, result) do
     case reconciliation_projection(history, result) do

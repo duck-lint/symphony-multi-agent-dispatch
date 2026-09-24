@@ -99,7 +99,7 @@ defmodule SymphonyElixir.RoleKernelTest do
       assert prompt =~ "role\" must be exactly \"#{RoleProfiles.role_name(role)}\""
 
       assert prompt =~
-               "summary\" must be a non-empty JSON string of at most #{RoleProfiles.role_result_summary_max_length()} characters"
+               "summary\" must be a non-empty JSON string of at most #{RoleProfiles.role_result_summary_max_length(role)} characters"
 
       assert prompt =~ "evidence\" must be a JSON array"
       assert prompt =~ "findings\" must be a JSON array"
@@ -550,6 +550,46 @@ defmodule SymphonyElixir.RoleKernelTest do
                )
              )
 
+    planner_max_summary = String.duplicate("p", RoleProfiles.role_result_summary_max_length(:planner))
+    planner_result = Map.put(valid_result("PLANNER", "plan_ready"), "summary", planner_max_summary)
+
+    assert {:ok, _} = Lifecycle.validate_result(planner_result)
+
+    planner_over_limit = Map.put(planner_result, "summary", planner_max_summary <> "p")
+
+    assert {:error, :role_result_summary_too_long} =
+             Lifecycle.validate_result(planner_over_limit)
+
+    assert {:error, {:role_result_summary_too_long, summary_context}} =
+             Lifecycle.decode_and_validate_result(Jason.encode!(planner_over_limit), :planner)
+
+    assert summary_context.expected_maximum == 24_000
+    assert summary_context.actual_length == 24_001
+
+    summary_diagnostic = Lifecycle.correction_diagnostic({:role_result_summary_too_long, summary_context})
+    assert summary_diagnostic =~ "Expected maximum: 24000 characters."
+    assert summary_diagnostic =~ "Received: 24001 characters."
+    assert summary_diagnostic =~ "Shorten the plan while preserving all required revision findings and exact plan excerpts."
+
+    observation_result =
+      planner_over_limit
+      |> Map.put("summary", String.duplicate("p", 24_001))
+      |> Map.put("revision_reconciliation", %{
+        "finding_responses" => [
+          %{"finding_ref" => "finding-valid", "plan_excerpt" => "p"},
+          %{"finding_ref" => "finding-long", "plan_excerpt" => String.duplicate("x", 1_001)},
+          %{"finding_ref" => "finding-short", "plan_excerpt" => "missing"},
+          %{"finding_ref" => "finding-null", "plan_excerpt" => nil}
+        ]
+      })
+
+    assert {:error, {:role_result_summary_too_long, observation_context}} =
+             Lifecycle.decode_and_validate_result(Jason.encode!(observation_result), :planner)
+
+    assert observation_context.revision_observation.passed_finding_refs == ["finding-valid"]
+    assert Enum.map(observation_context.revision_observation.failed, & &1.finding_ref) == ["finding-long", "finding-short", "finding-null"]
+    assert Enum.at(observation_context.revision_observation.failed, 0).supplied_excerpt =~ "[truncated]"
+
     assert {:error, :invalid_role_result_evidence} =
              Lifecycle.validate_result(Map.put(valid_result("REVIEWER", "accept"), "evidence", ["", 12]))
 
@@ -632,6 +672,46 @@ defmodule SymphonyElixir.RoleKernelTest do
     assert Lifecycle.correction_diagnostic({:invalid_prerequisite_list, :other}) =~
              "Invalid field: prerequisite_resolution.other"
 
+    all_failed_diagnostic =
+      Lifecycle.correction_diagnostic(
+        {:invalid_revision_plan_excerpt,
+         {:excerpt_not_in_plan_summary,
+          %{
+            failed: [
+              %{
+                finding_ref: "finding-only",
+                field_path: "revision_reconciliation.finding_responses[finding_ref=finding-only].plan_excerpt",
+                supplied_excerpt: "missing",
+                requirement: "exact substring"
+              }
+            ],
+            passed_finding_refs: []
+          }}}
+      )
+
+    assert all_failed_diagnostic =~ "No finding excerpts passed exact-substring provenance"
+
+    assert Lifecycle.correction_diagnostic({:invalid_revision_plan_excerpt, :legacy}) =~
+             "verbatim contiguous substring"
+
+    empty_revision_state = %{
+      identity: %{lifecycle_id: "lifecycle", round: 1},
+      attempts: [],
+      passed_finding_refs: [],
+      currently_failed_finding_refs: [],
+      summary_length_failures: []
+    }
+
+    assert Lifecycle.correction_diagnostic({:invalid_revision_plan_excerpt, :legacy}, empty_revision_state) =~
+             "Mechanically passed finding refs retained: none"
+
+    summary_limit_context = %{role: :planner, expected_maximum: 24_000, actual_length: 24_001}
+
+    summary_limit_diagnostic =
+      Lifecycle.correction_diagnostic({:role_result_summary_too_long, summary_limit_context})
+
+    assert summary_limit_diagnostic =~ "Expected maximum: 24000 characters."
+
     for {value, expected_type} <- [
           {%{}, "JSON object"},
           {true, "JSON boolean"},
@@ -689,6 +769,128 @@ defmodule SymphonyElixir.RoleKernelTest do
         assert diagnostic =~ "Received: JSON string."
       end
     end
+  end
+
+  test "Planner revision correction retains bounded mechanical context across fresh retries" do
+    issue = %Issue{id: "issue-revision-context", identifier: "MT-REVISION-CONTEXT", url: "https://example.test/issue-revision-context"}
+
+    episode = %{
+      lifecycle_id: "lifecycle-revision-context",
+      round: 2,
+      planning_attempt: 2,
+      rejected_planner_transition_id: "transition-planner",
+      reviewer_transition_id: "transition-reviewer"
+    }
+
+    first_ref = make_ref()
+
+    first_entry = %{
+      ref: first_ref,
+      pid: self(),
+      identifier: issue.identifier,
+      issue: issue,
+      role: :planner,
+      correction_attempt: 0,
+      retry_attempt: 0,
+      revision_episode: episode,
+      worker_host: nil,
+      workspace_path: nil,
+      session_id: "session-revision-context-1",
+      started_at: DateTime.utc_now()
+    }
+
+    state = %Orchestrator.State{
+      running: %{issue.id => first_entry},
+      claimed: MapSet.new([issue.id]),
+      retry_attempts: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    first_reason =
+      {:invalid_role_result,
+       {:invalid_revision_plan_excerpt,
+        {:excerpt_not_in_plan_summary,
+         %{
+           failed: [
+             %{
+               finding_ref: "finding-2",
+               field_path: "revision_reconciliation.finding_responses[finding_ref=finding-2].plan_excerpt",
+               supplied_excerpt: "not present",
+               requirement: "exact contiguous substring"
+             }
+           ],
+           passed_finding_refs: ["finding-1"]
+         }}}}
+
+    {:noreply, state} =
+      Orchestrator.handle_info(
+        {:role_execution_failed, issue.id, %{kind: :role_result_contract, role: :planner, reason: first_reason}},
+        state
+      )
+
+    {:noreply, state} = Orchestrator.handle_info({:DOWN, first_ref, :process, self(), :normal}, state)
+    first_retry = state.retry_attempts[issue.id]
+    first_packet = first_retry.revision_correction_state
+
+    assert first_packet.identity == episode
+    assert first_packet.passed_finding_refs == ["finding-1"]
+    assert first_packet.currently_failed_finding_refs == ["finding-2"]
+    assert first_packet.attempts |> List.last() |> Map.get(:attempt) == 1
+    assert first_retry.correction_attempt == 1
+    assert first_retry.correction_feedback =~ "finding_ref=finding-2"
+    assert first_retry.correction_feedback =~ "finding_ref=finding-2"
+
+    Process.cancel_timer(first_retry.timer_ref)
+
+    second_ref = make_ref()
+
+    second_entry =
+      Map.merge(first_entry, %{
+        ref: second_ref,
+        correction_attempt: 1,
+        revision_correction_state: first_packet,
+        session_id: "session-revision-context-2"
+      })
+
+    state = %{state | running: %{issue.id => second_entry}, retry_attempts: %{}}
+
+    second_reason =
+      {:invalid_role_result,
+       {:role_result_summary_too_long,
+        %{
+          role: "PLANNER",
+          expected_maximum: 24_000,
+          actual_length: 16_493,
+          revision_observation: %{
+            passed_finding_refs: ["finding-1", "finding-2"],
+            failed: [%{finding_ref: "finding-3"}]
+          }
+        }}}
+
+    {:noreply, state} =
+      Orchestrator.handle_info(
+        {:role_execution_failed, issue.id, %{kind: :role_result_contract, role: :planner, reason: second_reason}},
+        state
+      )
+
+    {:noreply, state} = Orchestrator.handle_info({:DOWN, second_ref, :process, self(), :normal}, state)
+    second_retry = state.retry_attempts[issue.id]
+    second_packet = second_retry.revision_correction_state
+
+    assert Enum.map(second_packet.attempts, & &1.attempt) == [1, 2]
+    assert second_packet.passed_finding_refs == ["finding-1", "finding-2"]
+    assert second_packet.currently_failed_finding_refs == ["finding-3"]
+    assert [%{actual_length: 16_493, expected_maximum: 24_000}] = second_packet.summary_length_failures
+    assert second_retry.correction_feedback =~ "Expected maximum: 24000 characters."
+    assert second_retry.correction_feedback =~ "Received: 16493 characters."
+    assert second_retry.correction_feedback =~ "Mechanically passed finding refs retained: finding-1, finding-2"
+    assert second_retry.correction_feedback =~ "A passed excerpt is not semantic resolution"
+
+    prompt = PromptBuilder.build_prompt(issue, :planner, %{correction_feedback: second_retry.correction_feedback})
+    assert prompt =~ "Currently failing finding refs: finding-3"
+    assert prompt =~ "Reviewer remains the semantic authority"
+
+    Process.cancel_timer(second_retry.timer_ref)
   end
 
   test "planner correction diagnostics survive the retry path into the next prompt" do

@@ -14,6 +14,7 @@ defmodule SymphonyElixir.RoleProfiles do
   @roles [:pm, :planner, :reviewer, :implementer, :adversary, :archivist]
 
   @role_result_summary_max_length 16_000
+  @planner_result_summary_max_length 24_000
 
   @labels %{
     pm: "symphony:role:pm",
@@ -396,6 +397,10 @@ defmodule SymphonyElixir.RoleProfiles do
   @spec role_result_summary_max_length() :: pos_integer()
   def role_result_summary_max_length, do: @role_result_summary_max_length
 
+  @spec role_result_summary_max_length(role()) :: pos_integer()
+  def role_result_summary_max_length(:planner), do: @planner_result_summary_max_length
+  def role_result_summary_max_length(_role), do: @role_result_summary_max_length
+
   @spec result_contract_instructions() :: String.t()
   def result_contract_instructions, do: result_contract_instructions(:pm)
 
@@ -411,7 +416,7 @@ defmodule SymphonyElixir.RoleProfiles do
     "schema" must be exactly "symphony.role-result/v1". "role" must be exactly "#{role_name}"
     (one of PM, PLANNER, REVIEWER, IMPLEMENTER, ADVERSARY, or ARCHIVIST). For this #{role_name}
     role, "outcome" must be exactly one of: #{allowed_outcomes}. Do not invent synonyms such as "handoff" or "done".
-    "summary" must be a non-empty JSON string of at most #{role_result_summary_max_length()} characters. "evidence" must be a
+    "summary" must be a non-empty JSON string of at most #{role_result_summary_max_length(role)} characters. "evidence" must be a
     JSON array; every item must be a non-empty JSON string (the array may be empty).
     "findings" must be a JSON array; every item must be an object with exactly these keys:
     "severity", "summary", and "evidence". Do not add keys to a finding. "severity" must be
