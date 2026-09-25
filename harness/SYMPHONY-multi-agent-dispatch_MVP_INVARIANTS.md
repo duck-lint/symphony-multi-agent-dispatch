@@ -53,8 +53,8 @@ The **initial** PM invocation may route only to Planner or valid human escalatio
 
 Unless explicitly changed later, retain these bounds:
 
-- at most **3 Planner/Reviewer attempts per working round**;
-- at most **8 working rounds per lifecycle**;
+- at most **3 Planner/Reviewer attempts per planning cycle**;
+- at most **8 working rounds per epoch**;
 - exhausting either budget is **non-convergence**, not success and not automatically a blocker;
 - infrastructure retries, worker crashes, timeouts, or transport failures do **not** consume lifecycle budgets.
 
@@ -115,7 +115,7 @@ For MVP, transition identity is deterministic from lifecycle position:
 
 The host must check for an existing `transition_id` before appending a comment. Replaying a completed host operation therefore completes or verifies the same transition rather than creating another event.
 
-### Working rounds and planning attempts
+### Epochs, working rounds, planning cycles, and attempts
 
 A working round is:
 
@@ -123,13 +123,21 @@ A working round is:
 PM → Planner → Reviewer [↔ Planner/Reviewer corrections] → Implementer → Adversary → PM
 ```
 
-Budget counters are reconstructed from the accepted lifecycle event history rather than maintained in a separate mutable store.
+The bounded horizons are `lifecycle → epoch → working round → planning cycle
+→ Planner/Reviewer attempt`. Budget counters are reconstructed from accepted
+lifecycle history.
 
-- `PM → PLANNER` opens a round with planning attempt `1`.
-- `REVIEWER → PLANNER` increments the planning attempt within the same round.
-- A Reviewer revision after planning attempt `3` terminates the lifecycle as non-converged rather than dispatching a fourth Planner.
-- A returning PM outcome requesting another round increments the working round and resets planning attempt to `1`.
-- A returning PM request for another round after round `8` terminates the lifecycle as non-converged rather than opening round `9`.
+- `PM → PLANNER` opens a round with planning attempt `1`, planning cycle `1`, and local cycle attempt `1`.
+- `REVIEWER → PLANNER` increments the round-local monotonic planning attempt and the local cycle attempt.
+- A Reviewer revision on local cycle attempt `3` terminates as `planning_attempt_exhausted`.
+- A human response scoped to `planning_cycle` must target that exact terminal Reviewer transition. The signed `planning_response_accepted` event starts the next cycle in the same round and epoch at the next monotonic planning attempt. A fresh Planner receives the final rejected plan, Reviewer findings, and authenticated guidance. The PM thread is untouched. The first Planner result acknowledges the accepted response.
+- A returning PM request for another round increments the global round, resets planning attempt and planning cycle to `1`, and increments `epoch_round`.
+- A returning PM request after local `epoch_round` `8` terminates as `working_round_exhausted`. A human epoch continuation resets only `epoch_round`, preserves monotonic global rounds, and resumes the same PM thread.
+
+Human guidance opens only the named bounded horizon. It is evidence and
+authorization, not role authority. The planning guidance ceases to be active
+prompt state when Reviewer accepts the plan. The host discovers responses
+on terminal issues through ordinary lifecycle-recovery polling.
 
 Non-convergence removes `symphony:auto` and the role label, adds `symphony:state:non-converged`, writes a terminal lifecycle comment, and leaves the GitHub issue open for human disposition or a later lifecycle.
 

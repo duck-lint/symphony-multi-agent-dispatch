@@ -72,7 +72,7 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp validate_human_guidance_acknowledgment(_role, nil), do: :ok
 
-  defp validate_human_guidance_acknowledgment(:pm, acknowledgment) when is_map(acknowledgment) do
+  defp validate_human_guidance_acknowledgment(role, acknowledgment) when role in [:pm, :planner] and is_map(acknowledgment) do
     if Map.keys(acknowledgment) -- @human_guidance_acknowledgment_keys == [] and
          Enum.all?(@human_guidance_acknowledgment_keys, &Map.has_key?(acknowledgment, &1)) and
          is_binary(acknowledgment["response_transition_id"]) and
@@ -370,6 +370,9 @@ defmodule SymphonyElixir.Lifecycle do
           epoch_round: Map.get(state, :epoch_round, 0),
           epoch_start_round: Map.get(state, :epoch_start_round, 1),
           planning_attempt: Map.get(state, :planning_attempt),
+          planning_cycle: Map.get(state, :planning_cycle, 0),
+          planning_cycle_start_attempt: Map.get(state, :planning_cycle_start_attempt, 0),
+          planning_cycle_attempt: Map.get(state, :planning_cycle_attempt, 0),
           pm_phase: phase_name(Map.get(state, :pm_phase)),
           completed_working_round?: Map.get(state, :completed_working_round?, false),
           implementation_status: implementation_status(role, state),
@@ -378,7 +381,8 @@ defmodule SymphonyElixir.Lifecycle do
           outcome_routes: outcome_routes(role, transition_context),
           temporal_interpretation: temporal_interpretation(role, predecessor),
           prerequisite_context: prerequisite,
-          human_guidance: Map.get(state, :human_guidance)
+          human_guidance: if(role == :pm, do: Map.get(state, :human_guidance)),
+          planning_guidance: if(role == :planner, do: Map.get(state, :planning_guidance))
         }
 
       {:error, _reason} ->

@@ -3,6 +3,98 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
 
   alias SymphonyElixir.{LifecycleHistory, LifecycleIntegrity}
 
+  test "planning continuation resets only the local attempt budget and preserves transition identity" do
+    lifecycle_id = "cycle-ledger"
+    start = LifecycleHistory.start_event(lifecycle_id)
+    first = transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)
+
+    cycle_one =
+      Enum.flat_map(1..3, fn attempt ->
+        planner = transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, attempt)
+        reviewer = transition_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, attempt)
+
+        if attempt == 3 do
+          [
+            planner,
+            reviewer
+            |> Map.put("kind", "terminal")
+            |> Map.put("to_role", "NON_CONVERGED")
+            |> Map.put("terminal_reason", "planning_attempt_exhausted")
+          ]
+        else
+          [planner, reviewer]
+        end
+      end)
+
+    boundary = List.last(cycle_one)
+    assert {:ok, exhausted} = LifecycleHistory.project([start, first] ++ cycle_one)
+    assert {exhausted.planning_cycle, exhausted.planning_attempt, exhausted.planning_cycle_attempt} == {1, 3, 3}
+    refute exhausted.active?
+
+    response = %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "planning_response_accepted",
+      "lifecycle_id" => lifecycle_id,
+      "transition_id" => "#{lifecycle_id}:r1:cycle2:planning_response",
+      "boundary_transition_id" => boundary["transition_id"],
+      "round" => 1,
+      "planning_cycle" => 2,
+      "starting_planning_attempt" => 4,
+      "guidance" => %{
+        "decision" => "continue",
+        "text" => "Correct the reviewed defect.",
+        "authorized_actions" => [],
+        "provenance" => %{"comment_id" => 77, "author_id" => 7001}
+      }
+    }
+
+    assert {:error, :stale_planning_response_boundary} =
+             LifecycleHistory.project(
+               [start, first] ++
+                 cycle_one ++
+                 [Map.put(response, "boundary_transition_id", "old-boundary")]
+             )
+
+    alternative_boundary = Map.put(boundary, "terminal_reason", "prerequisite_non_progress")
+
+    assert {:error, :invalid_planning_response_boundary} =
+             LifecycleHistory.project([start, first] ++ Enum.drop(cycle_one, -1) ++ [alternative_boundary, response])
+
+    assert {:ok, resumed} = LifecycleHistory.project([start, first] ++ cycle_one ++ [response])
+    assert {resumed.round, resumed.epoch, resumed.epoch_round} == {1, 0, 1}
+    assert {resumed.planning_cycle, resumed.planning_attempt, resumed.planning_cycle_attempt} == {2, 4, 1}
+    assert resumed.current_role == :planner
+    assert resumed.planning_guidance["response_transition_id"] == response["transition_id"]
+
+    cycle_two =
+      Enum.flat_map(4..6, fn attempt ->
+        planner = transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, attempt)
+        reviewer = transition_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, attempt)
+
+        if attempt == 6 do
+          [
+            planner,
+            reviewer
+            |> Map.put("kind", "terminal")
+            |> Map.put("to_role", "NON_CONVERGED")
+            |> Map.put("terminal_reason", "planning_attempt_exhausted")
+          ]
+        else
+          [planner, reviewer]
+        end
+      end)
+
+    assert {:ok, second_exhaustion} =
+             LifecycleHistory.project([start, first] ++ cycle_one ++ [response] ++ cycle_two)
+
+    assert second_exhaustion.planning_cycle == 2
+    assert second_exhaustion.planning_attempt == 6
+    assert second_exhaustion.planning_cycle_attempt == 3
+
+    assert length(Enum.uniq(Enum.map(second_exhaustion.events, & &1["transition_id"]))) ==
+             length(second_exhaustion.events)
+  end
+
   test "ordinary comments are ignored and lifecycle comments project accepted history" do
     events = [
       LifecycleHistory.start_event("life-1"),
@@ -280,7 +372,7 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
       "kind" => "human_response_accepted",
       "lifecycle_id" => lifecycle_id,
       "transition_id" => "#{lifecycle_id}:epoch1:human_response",
-      "escalation_transition_id" => escalation["transition_id"],
+      "boundary_transition_id" => escalation["transition_id"],
       "epoch" => 1,
       "starting_round" => 1,
       "guidance" => %{

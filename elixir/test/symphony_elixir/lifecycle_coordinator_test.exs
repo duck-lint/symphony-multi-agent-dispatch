@@ -194,6 +194,240 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert committed["round"] == 1
   end
 
+  test "epoch continuation gives eight local rounds after global round six" do
+    lifecycle_id = "epoch-budget"
+
+    round_events = fn round ->
+      [
+        transition_event(lifecycle_id, "PM", "plan", "PLANNER", round, 1),
+        transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", round, 1),
+        transition_event(lifecycle_id, "REVIEWER", "accept", "IMPLEMENTER", round, 1),
+        transition_event(lifecycle_id, "IMPLEMENTER", "implementation_complete", "ADVERSARY", round, 1),
+        transition_event(lifecycle_id, "ADVERSARY", "review_complete", "PM", round, 1)
+      ]
+    end
+
+    escalation =
+      transition_event(lifecycle_id, "PM", "await_human", "AWAITING_HUMAN", 6, 1)
+      |> Map.merge(%{
+        "kind" => "escalation",
+        "human_question" => "What direction is authorized?",
+        "escalation_basis" => %{
+          "required_external_action" => "Choose a bounded direction.",
+          "existing_authority_gap" => "The PM cannot decide it.",
+          "supporting_transition_ids" => [LifecycleHistory.transition_id(lifecycle_id, 6, 1, :adversary, "review_complete")]
+        }
+      })
+
+    response_id = "#{lifecycle_id}:epoch1:human_response"
+
+    response = %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "human_response_accepted",
+      "lifecycle_id" => lifecycle_id,
+      "transition_id" => response_id,
+      "boundary_transition_id" => escalation["transition_id"],
+      "epoch" => 1,
+      "starting_round" => 7,
+      "guidance" => %{
+        "decision" => "continue",
+        "text" => "Continue for one bounded epoch.",
+        "authorized_actions" => [],
+        "provenance" => %{"comment_id" => 900, "author_id" => 12_345}
+      }
+    }
+
+    prefix = [LifecycleHistory.start_event(lifecycle_id)] ++ Enum.flat_map(1..6, round_events) ++ [escalation, response]
+    assert {:ok, new_epoch} = LifecycleHistory.project(prefix)
+    assert {new_epoch.round, new_epoch.epoch, new_epoch.epoch_round} == {6, 1, 0}
+
+    seven_rounds = prefix ++ Enum.flat_map(7..13, round_events)
+    assert {:ok, after_seven} = LifecycleHistory.project(seven_rounds)
+    assert {after_seven.round, after_seven.epoch_round} == {13, 7}
+
+    all_rounds = prefix ++ Enum.flat_map(7..14, round_events)
+    assert {:ok, after_eight} = LifecycleHistory.project(all_rounds)
+    assert {after_eight.round, after_eight.epoch_round} == {14, 8}
+
+    install = fn events ->
+      Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+        %{state | issue: %{state.issue | labels: ["symphony:auto", "symphony:role:pm", "human-label"]}, comments: Enum.map(events, &%{"body" => LifecycleHistory.render(&1)})}
+      end)
+    end
+
+    result_for = fn round ->
+      ids =
+        round_events.(round)
+        |> Enum.drop(1)
+        |> Enum.map(& &1["transition_id"])
+
+      role_result("PM", "plan", "Another bounded working round is required.")
+      |> Map.put("reconciliation", %{
+        "considered_transition_ids" => ids,
+        "assessment" => "All current-round specialist evidence was considered."
+      })
+      |> Map.put("human_guidance_acknowledgment", %{
+        "response_transition_id" => response_id,
+        "assessment" => "The human direction is applied within this epoch."
+      })
+    end
+
+    install.(seven_rounds)
+    assert {:ok, %{event: allowed}} = LifecycleCoordinator.commit_role_result(github_issue(), :pm, result_for.(13))
+    assert {allowed["kind"], allowed["round"]} == {"transition", 14}
+
+    install.(all_rounds)
+    assert {:ok, %{event: exhausted}} = LifecycleCoordinator.commit_role_result(github_issue(), :pm, result_for.(14))
+
+    assert {exhausted["kind"], exhausted["round"], exhausted["terminal_reason"]} ==
+             {"terminal", 15, "working_round_exhausted"}
+  end
+
+  test "planning exhaustion resumes at fresh Planner with exact terminal review and local budget" do
+    lifecycle_id = "planning-continuation"
+    reviewer_id = LifecycleHistory.transition_id(lifecycle_id, 1, 3, :reviewer, "revise")
+
+    events =
+      [LifecycleHistory.start_event(lifecycle_id), transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)] ++
+        Enum.flat_map(1..3, fn attempt ->
+          planner = transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, attempt)
+
+          reviewer =
+            transition_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, attempt)
+            |> Map.put("findings", [
+              %{"severity" => "blocking", "summary" => "Correct attempt #{attempt}", "evidence" => ["review evidence"]}
+            ])
+
+          if attempt == 3 do
+            [
+              planner,
+              reviewer
+              |> Map.put("kind", "terminal")
+              |> Map.put("to_role", "NON_CONVERGED")
+              |> Map.put("terminal_reason", "planning_attempt_exhausted")
+            ]
+          else
+            [planner, reviewer]
+          end
+        end)
+
+    response = %{
+      "id" => 702,
+      "body" => human_response_body(lifecycle_id, reviewer_id, "Reconcile the final finding.", "planning_cycle"),
+      "user" => %{"id" => 12_345, "login" => "configured-user"},
+      "created_at" => "2026-09-20T12:00:00Z",
+      "updated_at" => "2026-09-20T12:00:00Z",
+      "html_url" => "https://github.test/comment/702"
+    }
+
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{state | issue: %{state.issue | labels: ["symphony:state:non-converged", "human-label"]}, comments: Enum.map(events, &%{"body" => LifecycleHistory.render(&1)})}
+    end)
+
+    assert {:skip, {:terminal_lifecycle, "non_converged"}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+      %{state | comments: state.comments ++ [response]}
+    end)
+
+    assert {:ok, %{history: resumed, handoff: handoff, issue: projected}} =
+             LifecycleCoordinator.prepare_dispatch(github_issue())
+
+    assert resumed.lifecycle_id == lifecycle_id
+    assert {resumed.epoch, resumed.round, resumed.epoch_round} == {0, 1, 1}
+    assert {resumed.planning_cycle, resumed.planning_attempt, resumed.planning_cycle_attempt} == {2, 4, 1}
+    assert resumed.current_role == :planner
+    assert projected.labels == ["human-label", "symphony:auto", "symphony:role:planner"]
+
+    assert handoff.revision_reconciliation.rejected_planner["transition_id"] ==
+             LifecycleHistory.transition_id(lifecycle_id, 1, 3, :planner, "plan_ready")
+
+    assert handoff.revision_reconciliation.reviewer["transition_id"] == reviewer_id
+    assert hd(handoff.revision_reconciliation.reviewer_findings)["finding_ref"] == "#{reviewer_id}:finding:0"
+
+    response_id = "#{lifecycle_id}:r1:cycle2:planning_response"
+    assert handoff.planning_guidance["response_transition_id"] == response_id
+    assert {:ok, %{history: replayed}} = LifecycleCoordinator.prepare_dispatch(projected)
+    assert replayed.events == resumed.events
+
+    plan = role_result("PLANNER", "plan_ready", "Corrected plan with concrete change.")
+
+    assert {:error, :missing_human_guidance_acknowledgment} =
+             LifecycleCoordinator.commit_role_result(projected, :planner, plan)
+
+    stale_plan =
+      Map.put(plan, "human_guidance_acknowledgment", %{
+        "response_transition_id" => "stale-response",
+        "assessment" => "This refers to old guidance."
+      })
+
+    assert {:error, :missing_human_guidance_acknowledgment} =
+             LifecycleCoordinator.commit_role_result(projected, :planner, stale_plan)
+
+    plan =
+      plan
+      |> Map.put("human_guidance_acknowledgment", %{
+        "response_transition_id" => response_id,
+        "assessment" => "The plan incorporates the authorized correction."
+      })
+      |> Map.put("revision_reconciliation", %{
+        "rejected_planner_transition_id" => handoff.revision_reconciliation.rejected_planner["transition_id"],
+        "reviewer_transition_id" => reviewer_id,
+        "finding_responses" => [
+          %{
+            "finding_ref" => "#{reviewer_id}:finding:0",
+            "assessment" => "The blocking finding requires a concrete correction.",
+            "plan_excerpt" => "Corrected plan"
+          }
+        ]
+      })
+
+    assert {:ok, %{event: committed}} = LifecycleCoordinator.commit_role_result(projected, :planner, plan)
+    assert committed["planning_attempt"] == 4
+
+    reviewer_result = role_result("REVIEWER", "revise", "A further correction is required.")
+
+    assert {:ok, %{event: revised_event}} =
+             LifecycleCoordinator.commit_role_result(projected, :reviewer, reviewer_result)
+
+    assert revised_event["kind"] == "transition"
+    assert revised_event["planning_attempt"] == 4
+
+    assert {:ok, %{history: next_history, handoff: next_handoff}} =
+             LifecycleCoordinator.prepare_dispatch(projected)
+
+    assert {next_history.planning_attempt, next_history.planning_cycle_attempt} == {5, 2}
+    assert next_handoff.planning_guidance["response_transition_id"] == response_id
+
+    next_plan =
+      role_result("PLANNER", "plan_ready", "The next correction is complete.")
+      |> Map.put("revision_reconciliation", %{
+        "rejected_planner_transition_id" => committed["transition_id"],
+        "reviewer_transition_id" => revised_event["transition_id"],
+        "finding_responses" => []
+      })
+
+    assert {:ok, %{event: next_committed}} =
+             LifecycleCoordinator.commit_role_result(projected, :planner, next_plan)
+
+    assert next_committed["planning_attempt"] == 5
+    assert next_committed["human_guidance_acknowledgment"] == nil
+
+    reviewer_accept = role_result("REVIEWER", "accept", "The revised plan resolves the finding.")
+
+    assert {:ok, %{issue: implementer_issue}} =
+             LifecycleCoordinator.commit_role_result(projected, :reviewer, reviewer_accept)
+
+    assert {:ok, %{history: accepted_history, handoff: implementer_handoff, lifecycle_context: implementer_context}} =
+             LifecycleCoordinator.prepare_dispatch(implementer_issue)
+
+    assert accepted_history.planning_guidance == nil
+    assert implementer_handoff.planning_guidance == nil
+    assert implementer_context.planning_guidance == nil
+    refute Enum.any?(implementer_handoff.accepted_events, &(&1["kind"] == "planning_response_accepted"))
+  end
+
   test "Reviewer revision dispatch carries the exact Planner and Reviewer evidence pair" do
     lifecycle_id = "planner-revision"
     install_planner_revision_history(planner_revision_events(lifecycle_id))
@@ -880,13 +1114,14 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     Enum.map(events, &%{"body" => LifecycleHistory.render(&1)})
   end
 
-  defp human_response_body(lifecycle_id, escalation_transition_id, guidance) do
+  defp human_response_body(lifecycle_id, escalation_transition_id, guidance, scope \\ "epoch") do
     "<!-- symphony.human-response/v1\n" <>
       Jason.encode!(
         %{
           "schema" => "symphony.human-response/v1",
           "lifecycle_id" => lifecycle_id,
-          "escalation_transition_id" => escalation_transition_id,
+          "scope" => scope,
+          "target_transition_id" => escalation_transition_id,
           "decision" => "continue",
           "guidance" => guidance,
           "authorized_actions" => []

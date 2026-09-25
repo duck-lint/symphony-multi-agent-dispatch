@@ -76,6 +76,23 @@ defmodule SymphonyElixir.RoleKernelTest do
     refute RoleProfiles.result_contract_instructions(:planner) =~ "Planner revision reconciliation"
   end
 
+  test "planning guidance appears only in the resumed Planner prompt and has a valid acknowledgment contract" do
+    issue = %Issue{identifier: "T-1", title: "Planning continuation"}
+    guidance = %{"response_transition_id" => "life:r1:cycle2:planning_response", "text" => "Correct the finding."}
+    context = %{planning_guidance: guidance}
+
+    planner_prompt = PromptBuilder.build_prompt(issue, :planner, %{lifecycle_context: context})
+    assert planner_prompt =~ "Host-accepted human planning guidance"
+    assert planner_prompt =~ guidance["response_transition_id"]
+    assert planner_prompt =~ "terminal Reviewer findings remain"
+
+    assert {:error, :invalid_human_guidance_acknowledgment} =
+             Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "human_guidance_acknowledgment", %{}))
+
+    assert {:error, :invalid_human_guidance_acknowledgment} =
+             Lifecycle.validate_result(Map.put(valid_result("PLANNER", "plan_ready"), "human_guidance_acknowledgment", 42))
+  end
+
   test "role prompts share the evidence contract and retain distinct behavior" do
     issue = %Issue{identifier: "T-1", title: "Profile reconciliation"}
 

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.HumanResponse do
   @moduledoc """
   Parses the one structured comment that can authorize continuation of an
-  awaiting-human lifecycle.
+  bounded lifecycle horizon.
 
   The comment body contains guidance, but authorization comes only from the
   authenticated GitHub comment metadata. This module intentionally ignores
@@ -13,18 +13,18 @@ defmodule SymphonyElixir.HumanResponse do
   @spec schema() :: String.t()
   def schema, do: @schema
 
-  @spec find([map()], String.t(), String.t(), [pos_integer()]) ::
+  @spec find([map()], String.t(), String.t(), String.t(), [pos_integer()]) ::
           :none | {:ok, map()} | {:error, term()}
-  def find(comments, lifecycle_id, escalation_transition_id, authorized_user_ids)
-      when is_list(comments) and is_binary(lifecycle_id) and is_binary(escalation_transition_id) and
+  def find(comments, lifecycle_id, scope, target_transition_id, authorized_user_ids)
+      when is_list(comments) and is_binary(lifecycle_id) and scope in ["epoch", "planning_cycle"] and is_binary(target_transition_id) and
              is_list(authorized_user_ids) do
-    find(comments, lifecycle_id, escalation_transition_id, authorized_user_ids, [])
+    find(comments, lifecycle_id, scope, target_transition_id, authorized_user_ids, [])
   end
 
-  @spec find([map()], String.t(), String.t(), [pos_integer()], [pos_integer()]) ::
+  @spec find([map()], String.t(), String.t(), String.t(), [pos_integer()], [pos_integer()]) ::
           :none | {:ok, map()} | {:error, term()}
-  def find(comments, lifecycle_id, escalation_transition_id, authorized_user_ids, ignored_comment_ids)
-      when is_list(comments) and is_binary(lifecycle_id) and is_binary(escalation_transition_id) and
+  def find(comments, lifecycle_id, scope, target_transition_id, authorized_user_ids, ignored_comment_ids)
+      when is_list(comments) and is_binary(lifecycle_id) and scope in ["epoch", "planning_cycle"] and is_binary(target_transition_id) and
              is_list(authorized_user_ids) and is_list(ignored_comment_ids) do
     parsed =
       comments
@@ -43,7 +43,8 @@ defmodule SymphonyElixir.HumanResponse do
       end)
 
     with {:ok, responses} <- parsed,
-         {:ok, current_responses} <- reject_stale_responses(responses, escalation_transition_id, ignored_comment_ids) do
+         {:ok, current_responses} <-
+           reject_stale_responses(responses, scope, target_transition_id, ignored_comment_ids) do
       select_authorized_response({:ok, current_responses}, authorized_user_ids)
     else
       {:error, _reason} = error -> error
@@ -71,7 +72,7 @@ defmodule SymphonyElixir.HumanResponse do
           {:ok,
            Map.merge(response, %{
              lifecycle_id: response["lifecycle_id"],
-             escalation_transition_id: response["escalation_transition_id"],
+             target_transition_id: response["target_transition_id"],
              provenance: provenance
            })}
         else
@@ -94,7 +95,7 @@ defmodule SymphonyElixir.HumanResponse do
   defp validate_response(_response), do: {:error, :human_response_not_a_map}
 
   defp validate_response_fields(response) do
-    allowed = ~w(schema lifecycle_id escalation_transition_id decision guidance authorized_actions)
+    allowed = ~w(schema lifecycle_id scope target_transition_id decision guidance authorized_actions)
 
     cond do
       Map.keys(response) -- allowed != [] ->
@@ -106,8 +107,11 @@ defmodule SymphonyElixir.HumanResponse do
       not non_empty_string?(response["lifecycle_id"]) ->
         {:error, :invalid_human_response_lifecycle_id}
 
-      not non_empty_string?(response["escalation_transition_id"]) ->
-        {:error, :invalid_human_response_escalation_id}
+      response["scope"] not in ["epoch", "planning_cycle"] ->
+        {:error, :invalid_human_response_scope}
+
+      not non_empty_string?(response["target_transition_id"]) ->
+        {:error, :invalid_human_response_target_id}
 
       response["decision"] != "continue" ->
         {:error, :unsupported_human_response_decision}
@@ -190,15 +194,15 @@ defmodule SymphonyElixir.HumanResponse do
     |> length() > 1
   end
 
-  defp reject_stale_responses(responses, escalation_transition_id, ignored_comment_ids) do
+  defp reject_stale_responses(responses, scope, target_transition_id, ignored_comment_ids) do
     {current, stale} =
-      Enum.split_with(responses, &(&1.escalation_transition_id == escalation_transition_id))
+      Enum.split_with(responses, &(&1["scope"] == scope and &1.target_transition_id == target_transition_id))
 
     unacknowledged_stale =
       Enum.reject(stale, &(&1[:provenance]["comment_id"] in ignored_comment_ids))
 
     if current == [] and unacknowledged_stale != [],
-      do: {:error, :stale_human_response_escalation},
+      do: {:error, :stale_human_response_target},
       else: {:ok, current}
   end
 

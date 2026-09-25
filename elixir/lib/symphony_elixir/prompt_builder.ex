@@ -79,6 +79,20 @@ defmodule SymphonyElixir.PromptBuilder do
     """
   end
 
+  defp human_guidance_section(:planner, %{planning_guidance: guidance}) when is_map(guidance) do
+    """
+
+    Host-accepted human planning guidance (authenticated authorization for one more bounded planning cycle):
+    #{format_context(guidance)}
+
+    This guidance does not grant project-write authority. The terminal Reviewer findings remain
+    binding review evidence. Incorporate or explicitly account for the guidance, and reconcile
+    every Reviewer finding under the revision contract. The first Planner result in this cycle
+    must include "human_guidance_acknowledgment" with "response_transition_id" copied exactly
+    from the guidance and a concise "assessment".
+    """
+  end
+
   defp human_guidance_section(_role, _lifecycle_context), do: ""
 
   defp reconciliation_section(handoff) do

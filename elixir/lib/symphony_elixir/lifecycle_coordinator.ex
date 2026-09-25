@@ -76,6 +76,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     reason in [
       :missing_returning_planner_revision_reconciliation,
       :unexpected_planner_revision_reconciliation,
+      :missing_human_guidance_acknowledgment,
       :invalid_revision_reconciliation,
       :invalid_revision_finding_responses,
       :invalid_revision_finding_response,
@@ -306,7 +307,10 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       if history.current_role == :archivist do
         events
       else
-        Enum.filter(events, &(&1["round"] == history.round))
+        Enum.filter(events, fn event ->
+          event["round"] == history.round and
+            (event["kind"] != "planning_response_accepted" or history.current_role == :planner)
+        end)
       end
 
     %{
@@ -323,7 +327,11 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       prerequisite_context: Lifecycle.prerequisite_context(history),
       reconciliation: LifecycleEvidence.project(history),
       revision_reconciliation: LifecycleEvidence.revision_projection(history),
-      human_guidance: Map.get(history, :human_guidance),
+      human_guidance: if(history.current_role == :pm, do: Map.get(history, :human_guidance)),
+      planning_guidance: if(history.current_role == :planner, do: Map.get(history, :planning_guidance)),
+      planning_cycle: Map.get(history, :planning_cycle, 0),
+      planning_cycle_start_attempt: Map.get(history, :planning_cycle_start_attempt, 0),
+      planning_cycle_attempt: Map.get(history, :planning_cycle_attempt, 0),
       accepted_events: handoff_events
     }
   end
@@ -346,6 +354,9 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     cond do
       history.terminal == "awaiting-human" ->
         prepare_human_continuation(issue, history, comments)
+
+      planning_exhaustion_boundary?(history) ->
+        prepare_planning_continuation(issue, history, comments)
 
       history.active? ->
         with :ok <- validate_active_issue(issue),
@@ -397,7 +408,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       has_label?(issue.labels, @auto_label) ->
         {:ok, issue}
 
-      Enum.any?(events, &(&1["kind"] == "human_response_accepted")) ->
+      Enum.any?(events, &(&1["kind"] in ["human_response_accepted", "planning_response_accepted"])) ->
         repair_active_projection(issue, role)
         |> case do
           :ok -> github_client().fetch_issue(issue.id)
@@ -436,6 +447,77 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp planning_exhaustion_boundary?(%{terminal: "non_converged", events: events, transition_id: transition_id}) do
+    case List.last(events) do
+      %{"kind" => "terminal", "role" => "REVIEWER", "outcome" => "revise", "to_role" => "NON_CONVERGED", "terminal_reason" => "planning_attempt_exhausted", "transition_id" => ^transition_id} -> true
+      _ -> false
+    end
+  end
+
+  defp planning_exhaustion_boundary?(_history), do: false
+
+  defp prepare_planning_continuation(issue, history, comments) do
+    with :ok <- validate_active_issue(issue),
+         :ok <- validate_planning_projection(issue),
+         {:ok, response} <- find_planning_response(comments, history),
+         {:ok, resumed_history, resumed_issue} <- accept_planning_response(issue, history, response) do
+      {:ok,
+       %{
+         issue: resumed_issue,
+         history: resumed_history,
+         handoff: dispatch_handoff(resumed_history),
+         lifecycle_context: Lifecycle.lifecycle_context(resumed_history)
+       }}
+    else
+      :none -> {:skip, {:terminal_lifecycle, history.terminal}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_planning_projection(issue) do
+    if not has_label?(issue.labels, @auto_label) and has_label?(issue.labels, @non_converged_label),
+      do: :ok,
+      else: {:error, :invalid_planning_terminal_projection}
+  end
+
+  defp find_planning_response(comments, history) do
+    HumanResponse.find(
+      comments,
+      history.lifecycle_id,
+      "planning_cycle",
+      history.transition_id,
+      Config.settings!().human_response.authorized_user_ids,
+      accepted_human_comment_ids(history)
+    )
+  end
+
+  defp accept_planning_response(issue, history, response) do
+    cycle = history.planning_cycle + 1
+
+    event = %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "planning_response_accepted",
+      "lifecycle_id" => history.lifecycle_id,
+      "transition_id" => "#{history.lifecycle_id}:r#{history.round}:cycle#{cycle}:planning_response",
+      "boundary_transition_id" => history.transition_id,
+      "round" => history.round,
+      "planning_cycle" => cycle,
+      "starting_planning_attempt" => history.planning_attempt + 1,
+      "guidance" => %{
+        "decision" => response["decision"],
+        "text" => response["guidance"],
+        "authorized_actions" => response["authorized_actions"],
+        "provenance" => response[:provenance]
+      }
+    }
+
+    with {:ok, persisted} <- persist_human_response(issue, history, event),
+         {:ok, projected_issue} <- project_and_verify(issue, %{kind: "transition", to_role: :planner}),
+         {:ok, resumed_history} <- LifecycleHistory.project(history.events ++ [persisted]) do
+      {:ok, resumed_history, projected_issue}
+    end
+  end
+
   defp validate_human_projection(issue) do
     if not has_label?(issue.labels, @auto_label) and has_label?(issue.labels, @awaiting_human_label),
       do: :ok,
@@ -446,6 +528,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     case HumanResponse.find(
            comments,
            history.lifecycle_id,
+           "epoch",
            history.transition_id,
            Config.settings!().human_response.authorized_user_ids,
            accepted_human_comment_ids(history)
@@ -458,8 +541,8 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
   defp accepted_human_comment_ids(%{events: events}) when is_list(events) do
     Enum.flat_map(events, fn
-      %{"kind" => "human_response_accepted", "guidance" => %{"provenance" => %{"comment_id" => id}}}
-      when is_integer(id) ->
+      %{"kind" => kind, "guidance" => %{"provenance" => %{"comment_id" => id}}}
+      when kind in ["human_response_accepted", "planning_response_accepted"] and is_integer(id) ->
         [id]
 
       _ ->
@@ -475,7 +558,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       "kind" => "human_response_accepted",
       "lifecycle_id" => history.lifecycle_id,
       "transition_id" => "#{history.lifecycle_id}:epoch#{epoch}:human_response",
-      "escalation_transition_id" => history.transition_id,
+      "boundary_transition_id" => history.transition_id,
       "epoch" => epoch,
       "starting_round" => history.round + 1,
       "guidance" => %{
@@ -707,6 +790,14 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp validate_evidence_reconciliation(history, %{"role" => "PLANNER"} = result) do
+    with :ok <- validate_planning_guidance_acknowledgment(history, result) do
+      validate_planner_revision_evidence(history, result)
+    end
+  end
+
+  defp validate_evidence_reconciliation(_history, _result), do: :ok
+
+  defp validate_planner_revision_evidence(history, result) do
     case LifecycleEvidence.revision_projection(history) do
       nil ->
         if is_nil(Map.get(result, "revision_reconciliation")) or
@@ -721,7 +812,25 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
-  defp validate_evidence_reconciliation(_history, _result), do: :ok
+  defp validate_planning_guidance_acknowledgment(%{planning_guidance: nil}, _result), do: :ok
+
+  defp validate_planning_guidance_acknowledgment(%{planning_guidance: guidance, events: events}, result) do
+    # Only the first Planner result in this cycle must acknowledge the accepted response.
+    acknowledged? =
+      Enum.any?(events, fn event ->
+        event["role"] == "PLANNER" and
+          get_in(event, ["human_guidance_acknowledgment", "response_transition_id"]) ==
+            guidance["response_transition_id"]
+      end)
+
+    if acknowledged? or
+         get_in(result, ["human_guidance_acknowledgment", "response_transition_id"]) ==
+           guidance["response_transition_id"] do
+      :ok
+    else
+      {:error, :missing_human_guidance_acknowledgment}
+    end
+  end
 
   defp validate_pm_guidance_acknowledgment(%{human_guidance: nil}, _result), do: :ok
 
@@ -988,7 +1097,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
 
   defp apply_budget(history, %{"role" => role_name, "outcome" => "revise"} = result, transition, position) do
     with {:ok, :reviewer} <- canonical_role(role_name) do
-      if history.planning_attempt >= 3 do
+      if history.planning_cycle_attempt >= 3 do
         {:ok,
          non_converged_transition(
            history,
@@ -1008,7 +1117,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp apply_budget(history, %{"role" => "PM", "outcome" => "plan"} = result, transition, position) do
-    if history.pm_phase == :returning and history.round >= 8 do
+    if history.pm_phase == :returning and history.epoch_round >= 8 do
       {:ok, non_converged_transition(history, result, transition, position, "working_round_exhausted")}
     else
       {:ok, Map.put(transition, :kind, "transition")}

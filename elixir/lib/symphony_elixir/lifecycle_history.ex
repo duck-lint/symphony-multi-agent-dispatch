@@ -16,6 +16,7 @@ defmodule SymphonyElixir.LifecycleHistory do
     "terminal",
     "escalation",
     "human_response_accepted",
+    "planning_response_accepted",
     "blocked"
   ]
   @roles [:pm, :planner, :reviewer, :implementer, :adversary, :archivist]
@@ -28,10 +29,14 @@ defmodule SymphonyElixir.LifecycleHistory do
           current_role: RoleProfiles.role() | nil,
           round: non_neg_integer(),
           planning_attempt: non_neg_integer(),
+          planning_cycle: non_neg_integer(),
+          planning_cycle_start_attempt: non_neg_integer(),
+          planning_cycle_attempt: non_neg_integer(),
           epoch: non_neg_integer(),
           epoch_round: non_neg_integer(),
           epoch_start_round: non_neg_integer(),
           human_guidance: map() | nil,
+          planning_guidance: map() | nil,
           pm_phase: :initial | :returning | nil,
           completed_working_round?: boolean(),
           preceding_adversary_findings: list(),
@@ -142,10 +147,14 @@ defmodule SymphonyElixir.LifecycleHistory do
       current_role: nil,
       round: 0,
       planning_attempt: 0,
+      planning_cycle: 0,
+      planning_cycle_start_attempt: 0,
+      planning_cycle_attempt: 0,
       epoch: 0,
       epoch_round: 0,
       epoch_start_round: 1,
       human_guidance: nil,
+      planning_guidance: nil,
       pm_phase: nil,
       completed_working_round?: false,
       preceding_adversary_findings: [],
@@ -238,13 +247,26 @@ defmodule SymphonyElixir.LifecycleHistory do
   end
 
   defp validate_kind_fields(%{"kind" => "human_response_accepted"} = event) do
-    required = ~w(transition_id escalation_transition_id epoch starting_round guidance)
+    required = ~w(transition_id boundary_transition_id epoch starting_round guidance)
 
     with :ok <- require_fields(event, required),
          :ok <- validate_transition_id_field(event["transition_id"]),
-         :ok <- validate_transition_id_field(event["escalation_transition_id"]),
+         :ok <- validate_transition_id_field(event["boundary_transition_id"]),
          :ok <- validate_non_negative_number(event["epoch"]),
          :ok <- validate_non_negative_number(event["starting_round"]) do
+      validate_guidance(event["guidance"])
+    end
+  end
+
+  defp validate_kind_fields(%{"kind" => "planning_response_accepted"} = event) do
+    required = ~w(transition_id boundary_transition_id round planning_cycle starting_planning_attempt guidance)
+
+    with :ok <- require_fields(event, required),
+         :ok <- validate_transition_id_field(event["transition_id"]),
+         :ok <- validate_transition_id_field(event["boundary_transition_id"]),
+         :ok <- validate_non_negative_number(event["round"]),
+         :ok <- validate_non_negative_number(event["planning_cycle"]),
+         :ok <- validate_non_negative_number(event["starting_planning_attempt"]) do
       validate_guidance(event["guidance"])
     end
   end
@@ -400,6 +422,12 @@ defmodule SymphonyElixir.LifecycleHistory do
        ),
        do: apply_human_response_event(state, event)
 
+  defp apply_event(
+         %{terminal: "non_converged", lifecycle_id: lifecycle_id} = state,
+         %{"kind" => "planning_response_accepted", "lifecycle_id" => lifecycle_id} = event
+       ),
+       do: apply_planning_response_event(state, event)
+
   defp apply_event(%{active?: false, lifecycle_id: lifecycle_id}, %{"lifecycle_id" => lifecycle_id}),
     do: {:error, :lifecycle_event_after_terminal}
 
@@ -479,7 +507,7 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   defp apply_human_response_event(%{active?: false, terminal: "awaiting-human"} = state, event) do
     cond do
-      event["escalation_transition_id"] != state.transition_id ->
+      event["boundary_transition_id"] != state.transition_id ->
         {:error, :stale_human_response_escalation}
 
       state.current_role != :pm ->
@@ -512,6 +540,57 @@ defmodule SymphonyElixir.LifecycleHistory do
     end
   end
 
+  defp apply_planning_response_event(%{active?: false} = state, event) do
+    with :ok <- validate_planning_boundary(List.last(state.events)),
+         :ok <- validate_planning_boundary_reference(state, event),
+         :ok <- validate_planning_response_position(state, event),
+         :ok <- validate_planning_response_id(state, event) do
+      {:ok,
+       %{
+         state
+         | active?: true,
+           terminal: nil,
+           current_role: :planner,
+           planning_attempt: event["starting_planning_attempt"],
+           planning_cycle: event["planning_cycle"],
+           planning_cycle_start_attempt: event["starting_planning_attempt"],
+           planning_cycle_attempt: 1,
+           planning_guidance: Map.put(event["guidance"], "response_transition_id", event["transition_id"]),
+           transition_id: event["transition_id"],
+           events: state.events ++ [event]
+       }}
+    end
+  end
+
+  defp validate_planning_boundary(%{
+         "kind" => "terminal",
+         "role" => "REVIEWER",
+         "outcome" => "revise",
+         "to_role" => "NON_CONVERGED",
+         "terminal_reason" => "planning_attempt_exhausted"
+       }),
+       do: :ok
+
+  defp validate_planning_boundary(_boundary), do: {:error, :invalid_planning_response_boundary}
+
+  defp validate_planning_boundary_reference(state, event) do
+    if event["boundary_transition_id"] == state.transition_id,
+      do: :ok,
+      else: {:error, :stale_planning_response_boundary}
+  end
+
+  defp validate_planning_response_position(state, event) do
+    if event["round"] == state.round and event["planning_cycle"] == state.planning_cycle + 1 and
+         event["starting_planning_attempt"] == state.planning_attempt + 1,
+       do: :ok,
+       else: {:error, :invalid_planning_response_position}
+  end
+
+  defp validate_planning_response_id(state, event) do
+    expected = "#{state.lifecycle_id}:r#{state.round}:cycle#{event["planning_cycle"]}:planning_response"
+    if event["transition_id"] == expected, do: :ok, else: {:error, :invalid_planning_response_transition_id}
+  end
+
   defp validate_event_position(state, :pm, %{"outcome" => "plan", "round" => round, "planning_attempt" => attempt}) do
     expected =
       case state.pm_phase do
@@ -531,6 +610,14 @@ defmodule SymphonyElixir.LifecycleHistory do
   defp compare_position(expected, round, attempt),
     do: {:error, {:invalid_lifecycle_event_position, expected, %{round: round, planning_attempt: attempt}}}
 
+  defp validate_terminal_transition(
+         state,
+         :pm,
+         %{"outcome" => "plan", "to_role" => "NON_CONVERGED", "terminal_reason" => "working_round_exhausted"}
+       ) do
+    if state.epoch_round >= 8, do: :ok, else: {:error, :premature_non_convergence}
+  end
+
   defp validate_terminal_transition(_state, :archivist, %{"outcome" => "archive_complete", "to_role" => "LIFECYCLE_COMPLETE"}), do: :ok
 
   defp validate_terminal_transition(_state, role, %{
@@ -545,7 +632,7 @@ defmodule SymphonyElixir.LifecycleHistory do
   end
 
   defp validate_terminal_transition(state, :reviewer, %{"outcome" => "revise", "to_role" => "NON_CONVERGED"}) do
-    if state.planning_attempt >= 3, do: :ok, else: {:error, :premature_non_convergence}
+    if state.planning_cycle_attempt >= 3, do: :ok, else: {:error, :premature_non_convergence}
   end
 
   defp validate_terminal_transition(_state, _role, _event),
@@ -589,6 +676,10 @@ defmodule SymphonyElixir.LifecycleHistory do
         current_role: :planner,
         round: event["round"],
         planning_attempt: 1,
+        planning_cycle: 1,
+        planning_cycle_start_attempt: 1,
+        planning_cycle_attempt: 1,
+        planning_guidance: nil,
         epoch_round: state.epoch_round + 1,
         pm_phase: :returning,
         transition_id: event["transition_id"]
@@ -602,10 +693,16 @@ defmodule SymphonyElixir.LifecycleHistory do
     do: %{state | current_role: :reviewer, transition_id: event["transition_id"]}
 
   defp advance_state(state, :reviewer, "revise", event),
-    do: %{state | current_role: :planner, planning_attempt: state.planning_attempt + 1, transition_id: event["transition_id"]}
+    do: %{
+      state
+      | current_role: :planner,
+        planning_attempt: state.planning_attempt + 1,
+        planning_cycle_attempt: state.planning_cycle_attempt + 1,
+        transition_id: event["transition_id"]
+    }
 
   defp advance_state(state, :reviewer, "accept", event),
-    do: %{state | current_role: :implementer, transition_id: event["transition_id"]}
+    do: %{state | current_role: :implementer, planning_guidance: nil, transition_id: event["transition_id"]}
 
   defp advance_state(state, :implementer, "implementation_complete", event),
     do: %{state | current_role: :adversary, transition_id: event["transition_id"]}

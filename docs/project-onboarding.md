@@ -164,7 +164,8 @@ shape and all of these fields:
 {
   "schema": "symphony.human-response/v1",
   "lifecycle_id": "<current lifecycle id>",
-  "escalation_transition_id": "<current escalation transition id>",
+  "scope": "epoch",
+  "target_transition_id": "<exact current escalation transition id>",
   "decision": "continue",
   "guidance": "Continue with the bounded, authorized correction.",
   "authorized_actions": []
@@ -172,12 +173,21 @@ shape and all of these fields:
 -->
 ```
 
-`lifecycle_id` and `escalation_transition_id` must bind the response to the
-current escalation. `guidance` must be non-empty. `authorized_actions` must be
+`lifecycle_id`, `scope`, and `target_transition_id` bind the response to the
+exact current boundary. Use `scope: "planning_cycle"` to continue a terminal
+Reviewer `revise` with `planning_attempt_exhausted`; the target must be that
+terminal Reviewer's transition ID. `guidance` must be non-empty. `authorized_actions` must be
 a list of strings and is empty unless the human explicitly authorizes named
 actions. The authenticated GitHub comment metadata—not prose in the body—supplies
 the author ID, comment identity, timestamps, and URL. Edited, malformed,
 unauthorized, stale, or conflicting comments do not continue the lifecycle.
+
+For planning exhaustion, use `"scope": "planning_cycle"` and set
+`target_transition_id` to the exact terminal Reviewer `revise` transition
+whose `terminal_reason` is `planning_attempt_exhausted`. The host starts a
+new bounded planning cycle in the same epoch and working round at a fresh
+Planner. The PM thread is not invoked. No lifecycle-label change is required
+from the human.
 
 When the PM lacks authority for an external decision, it returns `await_human`
 with a non-empty `human_question`. The host persists that escalation and adds

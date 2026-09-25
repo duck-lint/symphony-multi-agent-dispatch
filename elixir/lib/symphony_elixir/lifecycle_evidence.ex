@@ -8,6 +8,8 @@ defmodule SymphonyElixir.LifecycleEvidence do
   claims.
   """
 
+  alias SymphonyElixir.LifecycleHistory
+
   @specialist_roles ["PLANNER", "REVIEWER", "IMPLEMENTER", "ADVERSARY"]
 
   @type projection :: %{
@@ -75,6 +77,12 @@ defmodule SymphonyElixir.LifecycleEvidence do
 
   defp revision_projection_for_attempt(lifecycle_id, round, planning_attempt, events) do
     case Enum.reverse(events) do
+      [%{"kind" => "planning_response_accepted", "boundary_transition_id" => boundary_id} | _] ->
+        reviewer = Enum.find(events, &(&1["transition_id"] == boundary_id))
+        planner_id = LifecycleHistory.transition_id(lifecycle_id, round, planning_attempt, :planner, "plan_ready")
+        planner = Enum.find(events, &(&1["transition_id"] == planner_id))
+        revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer)
+
       [reviewer, planner | _older_events] ->
         revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer)
 
@@ -98,7 +106,9 @@ defmodule SymphonyElixir.LifecycleEvidence do
 
   defp revision_pair?(lifecycle_id, round, planning_attempt, planner, reviewer) do
     event_identity?(planner, lifecycle_id, round, planning_attempt, "PLANNER", "plan_ready", "REVIEWER") and
-      event_identity?(reviewer, lifecycle_id, round, planning_attempt, "REVIEWER", "revise", "PLANNER")
+      (event_identity?(reviewer, lifecycle_id, round, planning_attempt, "REVIEWER", "revise", "PLANNER") or
+         (event_identity?(reviewer, lifecycle_id, round, planning_attempt, "REVIEWER", "revise", "NON_CONVERGED") and
+            reviewer["kind"] == "terminal" and reviewer["terminal_reason"] == "planning_attempt_exhausted"))
   end
 
   defp event_identity?(event, lifecycle_id, round, planning_attempt, role, outcome, to_role) do

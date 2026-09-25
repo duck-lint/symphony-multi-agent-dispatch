@@ -15,7 +15,23 @@ PM → fresh Planner → fresh Reviewer → bounded Implementer → fresh Advers
 
 Reviewer revision returns to a fresh Planner. A blocking Adversary finding forces another working round
 through the same task-scoped PM. The initial PM cannot converge or skip to Archivist. Planning attempts are
-bounded at 3 per round and working rounds at 8; exhaustion is `symphony:state:non-converged`, not success.
+bounded at 3 per planning cycle and working rounds at 8 per epoch; exhaustion is
+`symphony:state:non-converged`, not success.
+
+The bounded horizons are nested:
+
+```text
+lifecycle
+└── epoch (up to 8 working rounds)
+    └── working round
+        └── planning cycle (up to 3 attempts)
+            └── Planner / Reviewer attempt
+```
+
+Global round and round-local planning-attempt numbers are immutable provenance
+coordinates. `epoch_round` and `planning_cycle_attempt` measure the active local
+budgets. An authorized response resets the relevant local budget without
+renumbering earlier transitions.
 
 Planner and Reviewer can carry a structured `prerequisite_resolution` report when a prerequisite blocks
 feasibility. The report records the blocked objective, missing prerequisite, evidence of absence, governing
@@ -46,8 +62,10 @@ is parsed for reconstruction, idempotence, and restart recovery and is the compl
 ledger; no lifecycle information is carried only in hidden HTML or a lossy summary.
 
 Terminal projection is idempotent: a correct terminal label set causes no GitHub mutation on later polls.
-Terminal issues are non-dispatchable. If the projection drifts, the host may repair it through the normal
-bounded lifecycle-label path and verifies the result.
+Terminal issues are quiescent. A planning-exhaustion terminal issue can resume
+only after an exact, authorized planning response; other terminal states retain
+their existing semantics. If the projection drifts, the host may repair it
+through the normal bounded lifecycle-label path and verifies the result.
 
 Prompt inputs keep four concerns separate: `RoleProfiles` supplies behavioral methodology,
 `RoleRuntimePolicy` supplies enforced mechanical authority, lifecycle context supplies the host-derived
@@ -142,7 +160,8 @@ the reports with a generated summary. The commit-time validator requires the PM 
 ledger order and requires returning PM escalations to cite a nonempty subset of those accepted IDs. Missing or
 invalid references are correctable role-result errors: the same PM thread receives the precise host diagnostic for
 at most three corrections, after which the lifecycle is visibly blocked without committing the rejected result.
-Old lifecycle events remain readable when these additive PM fields are absent.
+The ledger projection is the only lifecycle state authority; old response and
+continuation shapes are outside the clean-cutover contract.
 
 For a Planner returning after a Reviewer `revise`, the host builds a separate pure projection containing the exact
 rejected Planner event, triggering Reviewer event, and deterministic finding references. The Planner must account for
@@ -150,16 +169,17 @@ every reference; `plan_ready` responses must provide excerpts found verbatim in 
 `await_human` and `non_converged` responses account for findings without claiming an executable correction. The host
 checks identity, completeness, and excerpt provenance only; the next Reviewer judges semantic adequacy. Invalid
 Planner reconciliation is retried as a fresh Planner with a separate bounded technical-correction budget and does not
-consume a planning attempt. Historical events without this additive field remain readable.
+consume a planning attempt. The final Reviewer findings remain unresolved review evidence when a planning
+cycle is continued after exhaustion.
 
 ## Runtime configuration and provenance
 
-### Human-guided continuation and work epochs
+### Human-guided continuation of epochs and planning cycles
 
-An instance may configure the numeric GitHub user IDs permitted to answer an
-`await_human` escalation. A response is accepted only from a matching
-authenticated GitHub comment author and only when its structured body names the
-current lifecycle and escalation transition:
+An instance configures the numeric GitHub user IDs permitted to authorize
+continuation. A response is accepted only from a matching authenticated GitHub
+comment author and only when its structured body names the current lifecycle,
+scope, and exact terminal boundary transition:
 
 ```yaml
 human_response:
@@ -176,13 +196,30 @@ host obtains author ID, login, timestamps, comment ID, URL, and content digest
 from the authenticated GitHub API. Edited, malformed, unauthorized, stale, or
 conflicting comments do not advance the lifecycle.
 
-Each accepted response is one signed append-only lifecycle event. It keeps the
-same lifecycle ID, PM thread, and issue workspace, opens the next work epoch,
-and carries the prior global round history forward. Global round numbers and
-transition IDs remain monotonic; only the epoch-local working-round budget is
-reset. The resumed PM must acknowledge the accepted response by transition ID
-in its next role result. Human guidance is evidence and explicit authorization,
-not additional role authority.
+For `scope: "epoch"`, the target is the exact current `await_human` PM
+escalation. The signed `human_response_accepted` event records
+`boundary_transition_id`, the next epoch, `starting_round`, guidance, and
+authenticated comment provenance. The same PM thread resumes. Its next result
+must acknowledge that accepted event by transition ID. The epoch-local
+eight-round budget resets while global rounds remain monotonic.
+
+For `scope: "planning_cycle"`, the target must be the exact current terminal
+Reviewer `revise` event with `terminal_reason: "planning_attempt_exhausted"`.
+The signed `planning_response_accepted` event records
+`boundary_transition_id`, round, next planning cycle,
+`starting_planning_attempt`, guidance, and authenticated comment provenance.
+The same lifecycle, epoch, round, workspace, and PM thread remain in place.
+A fresh Planner starts directly at the next monotonic planning attempt. The
+planning-cycle-local three-attempt budget resets. The first Planner result
+must acknowledge the accepted event by transition ID and reconcile the exact
+rejected plan and terminal Reviewer findings. The guidance remains available
+through that planning cycle, expires as active prompt state on Reviewer
+acceptance, and never enters Implementer, Adversary, or PM prompts.
+
+Human guidance is evidence and authorization to reopen a bounded horizon;
+it does not grant role or project-write authority. Terminal planning-exhaustion
+issues are checked during ordinary lifecycle-recovery polling. Without a valid
+response they remain quiescent. No manual label change is needed.
 
 Host-written lifecycle events are authenticated with the instance-scoped
 `lifecycle.integrity_secret`. GitHub authorship alone is not a trust boundary
