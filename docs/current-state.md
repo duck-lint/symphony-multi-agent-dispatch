@@ -251,12 +251,12 @@ workspace instead of silently redirecting it. The verification report is
 ephemeral and records the safe repository, branch, `HEAD`, resolved branch
 commit, workspace identity, and timestamp for the current dispatch.
 
-The required Codex runtime configuration is `gpt-6-luna` with reasoning effort `high`, supplied through
+The required Codex runtime configuration is `gpt-5.6-luna` with reasoning effort `high`, supplied through
 the project instance's Codex app-server command, for example:
 
 ```yaml
 codex:
-  command: codex --config 'model="gpt-6-luna"' --config 'model_reasoning_effort="high"' app-server
+  command: codex --config 'model="gpt-5.6-luna"' --config 'model_reasoning_effort="high"' app-server
 ```
 
 For Linux x86_64 Burrito deployment, build only from a clean WSL-native `git archive` of the exact

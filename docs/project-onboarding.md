@@ -120,7 +120,7 @@ agent:
   max_concurrent_agents: 1
 
 codex:
-  command: codex --config 'model="gpt-6-luna"' --config 'model_reasoning_effort="high"' app-server
+  command: codex --config 'model="gpt-5.6-luna"' --config 'model_reasoning_effort="high"' app-server
   approval_policy: on-request
   thread_sandbox: workspace-write
   turn_sandbox_policy:
