@@ -16,7 +16,9 @@ defmodule SymphonyElixir.HumanResponse do
   @spec find([map()], String.t(), String.t(), String.t(), [pos_integer()]) ::
           :none | {:ok, map()} | {:error, term()}
   def find(comments, lifecycle_id, scope, target_transition_id, authorized_user_ids)
-      when is_list(comments) and is_binary(lifecycle_id) and scope in ["epoch", "planning_cycle", "specialist"] and is_binary(target_transition_id) and
+      when is_list(comments) and is_binary(lifecycle_id) and
+             scope in ["epoch", "planning_cycle", "specialist"] and
+             is_binary(target_transition_id) and
              is_list(authorized_user_ids) do
     find(comments, lifecycle_id, scope, target_transition_id, authorized_user_ids, [])
   end
@@ -24,7 +26,9 @@ defmodule SymphonyElixir.HumanResponse do
   @spec find([map()], String.t(), String.t(), String.t(), [pos_integer()], [pos_integer()]) ::
           :none | {:ok, map()} | {:error, term()}
   def find(comments, lifecycle_id, scope, target_transition_id, authorized_user_ids, ignored_comment_ids)
-      when is_list(comments) and is_binary(lifecycle_id) and scope in ["epoch", "planning_cycle", "specialist"] and is_binary(target_transition_id) and
+      when is_list(comments) and is_binary(lifecycle_id) and
+             scope in ["epoch", "planning_cycle", "specialist"] and
+             is_binary(target_transition_id) and
              is_list(authorized_user_ids) and is_list(ignored_comment_ids) do
     parsed =
       comments

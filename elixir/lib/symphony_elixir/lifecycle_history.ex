@@ -600,10 +600,16 @@ defmodule SymphonyElixir.LifecycleHistory do
 
   defp apply_specialist_response_event(%{active?: false, terminal: "awaiting-human"} = state, event) do
     with {:ok, role} <- role_from_name(event["role"]),
-         true <- role in [:planner, :reviewer, :implementer, :adversary, :archivist] or {:error, :specialist_response_requires_specialist_role},
+         true <-
+           role in [:planner, :reviewer, :implementer, :adversary, :archivist] or
+             {:error, :specialist_response_requires_specialist_role},
          true <- state.current_role == role or {:error, :specialist_response_role_mismatch},
-         true <- event["boundary_transition_id"] == state.transition_id or {:error, :stale_specialist_response_escalation},
-         true <- (event["round"] == state.round and event["planning_attempt"] == state.planning_attempt) or {:error, :invalid_specialist_response_position},
+         true <-
+           event["boundary_transition_id"] == state.transition_id or
+             {:error, :stale_specialist_response_escalation},
+         true <-
+           (event["round"] == state.round and event["planning_attempt"] == state.planning_attempt) or
+             {:error, :invalid_specialist_response_position},
          true <- event["transition_id"] == "#{state.transition_id}:response" or {:error, :invalid_specialist_response_transition_id} do
       guidance =
         Map.merge(event["guidance"], %{
@@ -806,7 +812,13 @@ defmodule SymphonyElixir.LifecycleHistory do
     }
 
   defp advance_state(state, :reviewer, "accept", event),
-    do: %{state | current_role: :implementer, planning_guidance: nil, specialist_guidance: nil, transition_id: event["transition_id"]}
+    do: %{
+      state
+      | current_role: :implementer,
+        planning_guidance: nil,
+        specialist_guidance: nil,
+        transition_id: event["transition_id"]
+    }
 
   defp advance_state(state, :implementer, "implementation_complete", event),
     do: %{state | current_role: :adversary, specialist_guidance: nil, transition_id: event["transition_id"]}

@@ -443,17 +443,51 @@ defmodule SymphonyElixir.LifecycleHistoryTest do
     assert {resumed.planning_cycle_attempt, resumed.current_role} == {1, :planner}
     assert resumed.specialist_guidance["response_transition_id"] == accepted["transition_id"]
 
+    assert {:error, :invalid_specialist_response_role} =
+             parse_event(Map.put(accepted, "role", "PM"))
+
+    assert {:error, :stale_specialist_response_escalation} =
+             LifecycleHistory.project([
+               start,
+               initial_plan,
+               escalation,
+               Map.put(accepted, "boundary_transition_id", "stale-boundary")
+             ])
+
     second_escalation =
       transition_event(lifecycle_id, "PLANNER", "await_human", "AWAITING_HUMAN", 1, 1)
       |> Map.merge(%{
         "kind" => "escalation",
-        "transition_id" => LifecycleHistory.specialist_transition_id(lifecycle_id, 1, 1, :planner, "await_human", 2),
+        "transition_id" =>
+          LifecycleHistory.specialist_transition_id(
+            lifecycle_id,
+            1,
+            1,
+            :planner,
+            "await_human",
+            2
+          ),
         "human_question" => "A second bounded question at the same position."
       })
 
-    assert {:ok, paused_again} = LifecycleHistory.project([start, initial_plan, escalation, accepted, second_escalation])
+    assert {:ok, paused_again} =
+             LifecycleHistory.project([
+               start,
+               initial_plan,
+               escalation,
+               accepted,
+               second_escalation
+             ])
+
     assert second_escalation["transition_id"] != escalation["transition_id"]
-    assert {paused_again.epoch, paused_again.round, paused_again.planning_cycle, paused_again.planning_attempt} == {0, 1, 1, 1}
+
+    assert {
+             paused_again.epoch,
+             paused_again.round,
+             paused_again.planning_cycle,
+             paused_again.planning_attempt
+           } == {0, 1, 1, 1}
+
     assert paused_again.transition_id == second_escalation["transition_id"]
   end
 

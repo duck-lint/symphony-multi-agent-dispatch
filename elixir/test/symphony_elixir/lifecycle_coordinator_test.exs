@@ -940,23 +940,37 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
         }
       end)
 
-      issue = %{github_issue() | labels: ["symphony:state:awaiting-human", "symphony:role:#{RoleProfiles.role_name(role) |> String.downcase()}", "human-label"]}
-      assert {:ok, %{history: resumed, issue: resumed_issue, lifecycle_context: context, handoff: handoff}} = LifecycleCoordinator.prepare_dispatch(issue)
+      role_label = "symphony:role:#{RoleProfiles.role_name(role) |> String.downcase()}"
+      issue = %{github_issue() | labels: ["symphony:state:awaiting-human", role_label, "human-label"]}
+
+      assert {:ok, %{history: resumed, issue: resumed_issue, lifecycle_context: context, handoff: handoff}} =
+               LifecycleCoordinator.prepare_dispatch(issue)
 
       assert resumed.current_role == role
-      assert {resumed.epoch, resumed.round, resumed.planning_cycle, resumed.planning_attempt, resumed.planning_cycle_attempt} == {0, 1, 1, 1, 1}
+
+      assert {
+               resumed.epoch,
+               resumed.round,
+               resumed.planning_cycle,
+               resumed.planning_attempt,
+               resumed.planning_cycle_attempt
+             } == {0, 1, 1, 1, 1}
+
       assert resumed.specialist_guidance["response_transition_id"] == "#{escalation["transition_id"]}:response"
       assert context.specialist_guidance["text"] == "Continue only within the existing role boundary."
       prompt = PromptBuilder.build_prompt(issue, role, %{lifecycle_context: context, handoff: handoff})
       assert prompt =~ "Continue only within the existing role boundary."
       assert handoff.specialist_guidance["role"] == RoleProfiles.role_name(role)
       assert Enum.any?(resumed_issue.labels, &(&1 == "symphony:auto"))
-      assert Enum.any?(resumed_issue.labels, &(&1 == "symphony:role:#{RoleProfiles.role_name(role) |> String.downcase()}"))
+      assert Enum.any?(resumed_issue.labels, &(&1 == role_label))
       refute Enum.any?(resumed_issue.labels, &(&1 == "symphony:state:awaiting-human"))
       refute Enum.any?(resumed.events, &(&1["kind"] == "human_response_accepted"))
 
-      result = role_result(RoleProfiles.role_name(role), outcome, "The accepted guidance was applied within the existing role boundary.")
-      assert {:error, :missing_human_guidance_acknowledgment} = LifecycleCoordinator.commit_role_result(resumed_issue, role, result)
+      result =
+        role_result(RoleProfiles.role_name(role), outcome, "The accepted guidance was applied within the existing role boundary.")
+
+      assert {:error, :missing_human_guidance_acknowledgment} =
+               LifecycleCoordinator.commit_role_result(resumed_issue, role, result)
 
       acknowledged =
         Map.put(result, "human_guidance_acknowledgment", %{
@@ -979,7 +993,13 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     reviewer = base ++ [transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)]
     implementer = reviewer ++ [transition_event(lifecycle_id, "REVIEWER", "accept", "IMPLEMENTER", 1, 1)]
     adversary = implementer ++ [transition_event(lifecycle_id, "IMPLEMENTER", "implementation_complete", "ADVERSARY", 1, 1)]
-    archivist = adversary ++ [transition_event(lifecycle_id, "ADVERSARY", "review_complete", "PM", 1, 1), transition_event(lifecycle_id, "PM", "converge", "ARCHIVIST", 1, 1)]
+
+    archivist =
+      adversary ++
+        [
+          transition_event(lifecycle_id, "ADVERSARY", "review_complete", "PM", 1, 1),
+          transition_event(lifecycle_id, "PM", "converge", "ARCHIVIST", 1, 1)
+        ]
 
     [
       {:planner, planner ++ [specialist_escalation_event(lifecycle_id, :planner)], "plan_ready"},
