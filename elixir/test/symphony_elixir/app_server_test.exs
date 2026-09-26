@@ -13,6 +13,43 @@ defmodule SymphonyElixir.AppServerTest do
     assert {:error, :turn_completed_without_agent_message} = run_capture_fixture!([])
   end
 
+  test "app server returns a redacted terminal Codex error instead of hiding it at turn completion" do
+    secret = "sk-svcac-do-not-log-this-value"
+
+    notification = %{
+      "method" => "error",
+      "params" => %{
+        "willRetry" => false,
+        "error" => %{
+          "code" => "unauthorized",
+          "message" => "401 Unauthorized: Incorrect API key provided: #{secret}",
+          "apiKey" => secret
+        }
+      }
+    }
+
+    assert {:error, {:codex_error, error}} = run_capture_fixture!([], [notification])
+    assert error["willRetry"] == false
+    assert error["error"]["code"] == "unauthorized"
+    assert error["error"]["message"] =~ "401 Unauthorized"
+    assert error["error"]["message"] =~ "[REDACTED_API_KEY]"
+    assert error["error"]["apiKey"] == "[REDACTED]"
+    refute inspect(error) =~ secret
+  end
+
+  test "app server does not treat a retrying Codex error as the terminal turn result" do
+    retrying_error = %{
+      "method" => "error",
+      "params" => %{
+        "willRetry" => true,
+        "error" => %{"message" => "temporary inference failure"}
+      }
+    }
+
+    assert {:ok, %{assistant_text: "recovered answer"}} =
+             run_capture_fixture!(["recovered answer"], [retrying_error])
+  end
+
   test "app server captures one completed agent message" do
     assert {:ok, %{assistant_text: "role result"}} = run_capture_fixture!(["role result"])
   end
@@ -1681,7 +1718,7 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
-  defp run_capture_fixture!(messages) do
+  defp run_capture_fixture!(messages, notifications \\ []) do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1706,6 +1743,11 @@ defmodule SymphonyElixir.AppServerTest do
         "            printf '%s\\n' '#{payload}'"
       end)
 
+    notification_lines =
+      Enum.map_join(notifications, "\n", fn payload ->
+        "            printf '%s\\n' '#{Jason.encode!(payload)}'"
+      end)
+
     File.write!(codex_binary, """
     #!/bin/sh
     count=0
@@ -1717,6 +1759,7 @@ defmodule SymphonyElixir.AppServerTest do
         3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-capture"}}}' ;;
         4)
           printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-capture"}}}'
+          #{notification_lines}
           #{agent_message_lines}
           printf '%s\\n' '{"method":"turn/completed"}'
           exit 0

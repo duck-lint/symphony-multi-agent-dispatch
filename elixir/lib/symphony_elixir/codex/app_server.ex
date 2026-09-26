@@ -656,6 +656,41 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp handle_decoded_message(
          port,
          on_message,
+         %{"method" => "error"} = payload,
+         _payload_string,
+         timeout_ms,
+         tool_executor,
+         auto_approve_requests,
+         completed_agent_messages
+       ) do
+    safe_payload = redact_codex_error_payload(payload)
+    safe_payload_string = Jason.encode!(safe_payload)
+    updated_messages = remember_terminal_codex_error(completed_agent_messages, payload)
+
+    # v2 error notifications can contain the only useful explanation for a
+    # failed inference. Keep their safe form attached to this turn so a later
+    # turn/completed does not erase a terminal Codex error.
+    emit_message(
+      on_message,
+      :notification,
+      %{payload: safe_payload, raw: safe_payload_string},
+      metadata_from_message(port, safe_payload)
+    )
+
+    receive_loop(
+      port,
+      on_message,
+      timeout_ms,
+      "",
+      tool_executor,
+      auto_approve_requests,
+      updated_messages
+    )
+  end
+
+  defp handle_decoded_message(
+         port,
+         on_message,
          %{"method" => "turn/completed"} = payload,
          payload_string,
          _timeout_ms,
@@ -666,8 +701,14 @@ defmodule SymphonyElixir.Codex.AppServer do
     emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
 
     case final_agent_message(completed_agent_messages) do
-      {:ok, assistant_text} -> {:ok, assistant_text}
-      :error -> {:error, :turn_completed_without_agent_message}
+      {:ok, assistant_text} ->
+        {:ok, assistant_text}
+
+      :error ->
+        case terminal_codex_error(completed_agent_messages) do
+          nil -> {:error, :turn_completed_without_agent_message}
+          codex_error -> {:error, {:codex_error, codex_error}}
+        end
     end
   end
 
@@ -901,6 +942,57 @@ defmodule SymphonyElixir.Codex.AppServer do
        do: messages ++ [text]
 
   defp collect_agent_message(messages, _payload), do: messages
+
+  defp remember_terminal_codex_error(messages, %{
+         "params" => %{"willRetry" => false, "error" => error}
+       })
+       when is_list(messages) do
+    messages ++ [{:terminal_codex_error, %{"willRetry" => false, "error" => redact_codex_error_value(error)}}]
+  end
+
+  # A retrying notification is evidence about an attempt, not the terminal
+  # result of the turn. A later response or turn failure remains authoritative.
+  defp remember_terminal_codex_error(messages, _payload), do: messages
+
+  defp terminal_codex_error(messages) when is_list(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      {:terminal_codex_error, error} -> error
+      _message -> nil
+    end)
+  end
+
+  defp redact_codex_error_payload(%{"params" => params} = payload) when is_map(params) do
+    Map.put(payload, "params", redact_codex_error_value(params))
+  end
+
+  defp redact_codex_error_payload(payload), do: redact_codex_error_value(payload)
+
+  defp redact_codex_error_value(value) when is_map(value) do
+    Map.new(value, fn {key, nested} ->
+      if sensitive_error_key?(key),
+        do: {key, "[REDACTED]"},
+        else: {key, redact_codex_error_value(nested)}
+    end)
+  end
+
+  defp redact_codex_error_value(value) when is_list(value),
+    do: Enum.map(value, &redact_codex_error_value/1)
+
+  defp redact_codex_error_value(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\bBearer\s+[^\s,;]+/i, "Bearer [REDACTED]")
+    |> String.replace(~r/\bsk-[A-Za-z0-9_-]{6,}\b/, "[REDACTED_API_KEY]")
+  end
+
+  defp redact_codex_error_value(value), do: value
+
+  defp sensitive_error_key?(key) when is_binary(key) do
+    String.match?(key, ~r/(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|secret|credential|password)/i)
+  end
+
+  defp sensitive_error_key?(_key), do: false
 
   defp final_agent_message(messages) when is_list(messages) do
     messages
