@@ -359,7 +359,7 @@ defmodule SymphonyElixir.Lifecycle do
         transition_context = lifecycle_transition_context(state)
         prerequisite = prerequisite_context(state)
 
-        %{
+        context = %{
           current_role: RoleProfiles.role_name(role),
           lifecycle_position: lifecycle_position(role, state, predecessor),
           predecessor: role_name_or_nil(predecessor),
@@ -370,9 +370,6 @@ defmodule SymphonyElixir.Lifecycle do
           epoch_round: Map.get(state, :epoch_round, 0),
           epoch_start_round: Map.get(state, :epoch_start_round, 1),
           planning_attempt: Map.get(state, :planning_attempt),
-          planning_cycle: Map.get(state, :planning_cycle, 0),
-          planning_cycle_start_attempt: Map.get(state, :planning_cycle_start_attempt, 0),
-          planning_cycle_attempt: Map.get(state, :planning_cycle_attempt, 0),
           pm_phase: phase_name(Map.get(state, :pm_phase)),
           completed_working_round?: Map.get(state, :completed_working_round?, false),
           implementation_status: implementation_status(role, state),
@@ -381,9 +378,10 @@ defmodule SymphonyElixir.Lifecycle do
           outcome_routes: outcome_routes(role, transition_context),
           temporal_interpretation: temporal_interpretation(role, predecessor),
           prerequisite_context: prerequisite,
-          human_guidance: if(role == :pm, do: Map.get(state, :human_guidance)),
-          planning_guidance: if(role == :planner, do: Map.get(state, :planning_guidance))
+          human_guidance: if(role == :pm, do: Map.get(state, :human_guidance))
         }
+
+        maybe_add_planning_guidance(context, role, Map.get(state, :planning_guidance))
 
       {:error, _reason} ->
         %{}
@@ -391,6 +389,11 @@ defmodule SymphonyElixir.Lifecycle do
   end
 
   def lifecycle_context(_state), do: %{}
+
+  defp maybe_add_planning_guidance(context, :planner, guidance) when is_map(guidance),
+    do: Map.put(context, :planning_guidance, guidance)
+
+  defp maybe_add_planning_guidance(context, _role, _guidance), do: context
 
   defp transition_for(_role, "await_human", %{prerequisite_resolution: nil}), do: {:ok, :await_human}
 

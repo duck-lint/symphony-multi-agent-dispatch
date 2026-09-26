@@ -423,8 +423,8 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
              LifecycleCoordinator.prepare_dispatch(implementer_issue)
 
     assert accepted_history.planning_guidance == nil
-    assert implementer_handoff.planning_guidance == nil
-    assert implementer_context.planning_guidance == nil
+    refute Map.has_key?(implementer_handoff, :planning_guidance)
+    refute Map.has_key?(implementer_context, :planning_guidance)
     refute Enum.any?(implementer_handoff.accepted_events, &(&1["kind"] == "planning_response_accepted"))
   end
 

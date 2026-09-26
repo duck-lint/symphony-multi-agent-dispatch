@@ -313,7 +313,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
         end)
       end
 
-    %{
+    handoff = %{
       lifecycle_id: history.lifecycle_id,
       current_role: history.current_role,
       round: history.round,
@@ -328,12 +328,13 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       reconciliation: LifecycleEvidence.project(history),
       revision_reconciliation: LifecycleEvidence.revision_projection(history),
       human_guidance: if(history.current_role == :pm, do: Map.get(history, :human_guidance)),
-      planning_guidance: if(history.current_role == :planner, do: Map.get(history, :planning_guidance)),
-      planning_cycle: Map.get(history, :planning_cycle, 0),
-      planning_cycle_start_attempt: Map.get(history, :planning_cycle_start_attempt, 0),
-      planning_cycle_attempt: Map.get(history, :planning_cycle_attempt, 0),
       accepted_events: handoff_events
     }
+
+    case {history.current_role, Map.get(history, :planning_guidance)} do
+      {:planner, guidance} when is_map(guidance) -> Map.put(handoff, :planning_guidance, guidance)
+      _ -> handoff
+    end
   end
 
   def dispatch_handoff(_history), do: %{}
