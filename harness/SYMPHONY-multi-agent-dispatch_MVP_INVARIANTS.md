@@ -243,7 +243,8 @@ REVIEWER + accept                  → IMPLEMENTER
 IMPLEMENTER + implementation_complete → ADVERSARY
 ADVERSARY + review_complete        → PM
 ARCHIVIST + archive_complete       → lifecycle-complete
-any role + await_human             → paused awaiting-human state
+PM + await_human                    → paused awaiting-human state; epoch continuation through same PM thread
+Planner/Reviewer/Implementer/Adversary/Archivist + await_human → paused awaiting-human state; role-local continuation through a fresh same-role worker, with no budget or horizon reset
 ```
 
 A Reviewer `accept` result may not contain blocking findings. A returning PM `converge` result is legal only when:
@@ -378,7 +379,14 @@ On valid human escalation, the host:
 - adds `symphony:state:awaiting-human` for semantic/authority escalation, or `symphony:state:blocked` for unrecoverable technical state;
 - appends a structured comment explaining the exact decision/recovery required and resume point.
 
-Resumption is explicit: after the exceptional condition is resolved, automation is re-enabled and the same lifecycle/role continues where structurally valid.
+Resumption is explicit: after a valid authenticated response, the host appends signed evidence before restoring
+`symphony:auto`. PM `await_human` resumes the same PM thread in a new epoch. Specialist `await_human` uses
+`symphony.human-response/v1` with `scope: "specialist"`, appends a distinct signed
+`specialist_response_accepted` event, and resumes a fresh worker of the exact persisted specialist role at the
+same lifecycle, workspace, epoch, round, planning cycle, planning attempt, and budget position. It does not
+route through PM or require manual label mutation. The resumed specialist receives role-local guidance and must
+acknowledge the exact accepted response transition ID before its next result is committed. Repeated specialist
+questions at one position use ledger-derived non-budget ordinals for deterministic transition identity.
 
 ### Lifecycle completion is not task closure
 

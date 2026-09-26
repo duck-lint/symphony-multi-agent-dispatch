@@ -331,14 +331,23 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       accepted_events: handoff_events
     }
 
-    case {history.current_role, Map.get(history, :planning_guidance)} do
-      {:planner, guidance} when is_map(guidance) -> Map.put(handoff, :planning_guidance, guidance)
-      _ -> handoff
-    end
+    handoff
+    |> maybe_add_planning_handoff(history)
+    |> maybe_add_specialist_handoff(history)
   end
 
   def dispatch_handoff(_history), do: %{}
 
+  defp maybe_add_planning_handoff(handoff, %{current_role: :planner, planning_guidance: guidance}) when is_map(guidance),
+    do: Map.put(handoff, :planning_guidance, guidance)
+
+  defp maybe_add_planning_handoff(handoff, _history), do: handoff
+
+  defp maybe_add_specialist_handoff(handoff, %{current_role: role, specialist_guidance: guidance})
+       when role in [:planner, :reviewer, :implementer, :adversary, :archivist] and is_map(guidance),
+       do: Map.put(handoff, :specialist_guidance, guidance)
+
+  defp maybe_add_specialist_handoff(handoff, _history), do: handoff
   @doc false
   @spec labels_for_test() :: map()
   def labels_for_test do
@@ -409,7 +418,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       has_label?(issue.labels, @auto_label) ->
         {:ok, issue}
 
-      Enum.any?(events, &(&1["kind"] in ["human_response_accepted", "planning_response_accepted"])) ->
+      Enum.any?(events, &(&1["kind"] in ["human_response_accepted", "planning_response_accepted", "specialist_response_accepted"])) ->
         repair_active_projection(issue, role)
         |> case do
           :ok -> github_client().fetch_issue(issue.id)
@@ -429,6 +438,37 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp prepare_human_continuation(issue, history, comments) do
+    case history.current_role do
+      :pm ->
+        prepare_pm_human_continuation(issue, history, comments)
+
+      role when role in [:planner, :reviewer, :implementer, :adversary, :archivist] ->
+        prepare_specialist_human_continuation(issue, history, comments, role)
+
+      role ->
+        {:error, {:unsupported_human_continuation_role, role}}
+    end
+  end
+
+  defp prepare_specialist_human_continuation(issue, history, comments, role) do
+    with :ok <- validate_active_issue(issue),
+         :ok <- validate_specialist_human_projection(issue, role),
+         {:ok, response} <- find_specialist_response(comments, history),
+         {:ok, resumed_history, resumed_issue} <- accept_specialist_response(issue, history, response) do
+      {:ok,
+       %{
+         issue: resumed_issue,
+         history: resumed_history,
+         handoff: dispatch_handoff(resumed_history),
+         lifecycle_context: Lifecycle.lifecycle_context(resumed_history)
+       }}
+    else
+      :none -> {:skip, :awaiting_human_response}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp prepare_pm_human_continuation(issue, history, comments) do
     with :ok <- validate_active_issue(issue),
          {:ok, :pm} <- RoleRouter.role_for_issue(issue),
          :ok <- validate_human_projection(issue),
@@ -525,6 +565,14 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       else: {:error, :invalid_awaiting_human_projection}
   end
 
+  defp validate_specialist_human_projection(issue, role) do
+    if not has_label?(issue.labels, @auto_label) and
+         has_label?(issue.labels, @awaiting_human_label) and
+         RoleRouter.role_for_issue(issue) == {:ok, role},
+       do: :ok,
+       else: {:error, :invalid_specialist_awaiting_human_projection}
+  end
+
   defp find_human_response(comments, history) do
     case HumanResponse.find(
            comments,
@@ -540,15 +588,51 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp find_specialist_response(comments, history) do
+    HumanResponse.find(
+      comments,
+      history.lifecycle_id,
+      "specialist",
+      history.transition_id,
+      Config.settings!().human_response.authorized_user_ids,
+      accepted_human_comment_ids(history)
+    )
+  end
+
   defp accepted_human_comment_ids(%{events: events}) when is_list(events) do
     Enum.flat_map(events, fn
       %{"kind" => kind, "guidance" => %{"provenance" => %{"comment_id" => id}}}
-      when kind in ["human_response_accepted", "planning_response_accepted"] and is_integer(id) ->
+      when kind in ["human_response_accepted", "planning_response_accepted", "specialist_response_accepted"] and is_integer(id) ->
         [id]
 
       _ ->
         []
     end)
+  end
+
+  defp accept_specialist_response(issue, history, response) do
+    event = %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "specialist_response_accepted",
+      "lifecycle_id" => history.lifecycle_id,
+      "transition_id" => "#{history.transition_id}:response",
+      "boundary_transition_id" => history.transition_id,
+      "role" => RoleProfiles.role_name(history.current_role),
+      "round" => history.round,
+      "planning_attempt" => history.planning_attempt,
+      "guidance" => %{
+        "decision" => response["decision"],
+        "text" => response["guidance"],
+        "authorized_actions" => response["authorized_actions"],
+        "provenance" => response[:provenance]
+      }
+    }
+
+    with {:ok, persisted} <- persist_human_response(issue, history, event),
+         {:ok, projected_issue} <- project_and_verify(issue, %{kind: "transition", to_role: history.current_role}),
+         {:ok, resumed_history} <- LifecycleHistory.project(history.events ++ [persisted]) do
+      {:ok, resumed_history, projected_issue}
+    end
   end
 
   defp accept_human_response(issue, history, response) do
@@ -791,9 +875,15 @@ defmodule SymphonyElixir.LifecycleCoordinator do
   end
 
   defp validate_evidence_reconciliation(history, %{"role" => "PLANNER"} = result) do
-    with :ok <- validate_planning_guidance_acknowledgment(history, result) do
+    with :ok <- validate_specialist_guidance_acknowledgment(history, result),
+         :ok <- validate_planning_guidance_acknowledgment(history, result) do
       validate_planner_revision_evidence(history, result)
     end
+  end
+
+  defp validate_evidence_reconciliation(history, %{"role" => role} = result)
+       when role in ["REVIEWER", "IMPLEMENTER", "ADVERSARY", "ARCHIVIST"] do
+    validate_specialist_guidance_acknowledgment(history, result)
   end
 
   defp validate_evidence_reconciliation(_history, _result), do: :ok
@@ -812,6 +902,31 @@ defmodule SymphonyElixir.LifecycleCoordinator do
         validate_planner_revision_reconciliation(result, projection)
     end
   end
+
+  defp validate_specialist_guidance_acknowledgment(%{specialist_guidance: nil}, _result), do: :ok
+
+  defp validate_specialist_guidance_acknowledgment(
+         %{specialist_guidance: guidance, events: events},
+         %{"role" => role} = result
+       )
+       when role in ["PLANNER", "REVIEWER", "IMPLEMENTER", "ADVERSARY", "ARCHIVIST"] and is_map(guidance) do
+    response_id = guidance["response_transition_id"]
+
+    acknowledged? =
+      Enum.any?(events, fn event ->
+        event["role"] == role and
+          get_in(event, ["human_guidance_acknowledgment", "response_transition_id"]) == response_id
+      end)
+
+    if acknowledged? or get_in(result, ["human_guidance_acknowledgment", "response_transition_id"]) == response_id do
+      :ok
+    else
+      {:error, :missing_human_guidance_acknowledgment}
+    end
+  end
+
+  defp validate_specialist_guidance_acknowledgment(_history, _result),
+    do: {:error, :missing_human_guidance_acknowledgment}
 
   defp validate_planning_guidance_acknowledgment(%{planning_guidance: nil}, _result), do: :ok
 
@@ -1173,6 +1288,19 @@ defmodule SymphonyElixir.LifecycleCoordinator do
     end
   end
 
+  defp transition_id_for(history, transition) do
+    result = transition.result
+    role = elem(canonical_role(result["role"]), 1)
+    outcome = result["outcome"]
+
+    if role in [:planner, :reviewer, :implementer, :adversary, :archivist] and outcome == "await_human" do
+      ordinal = LifecycleHistory.next_specialist_question_ordinal(history.events, role, transition.round, transition.planning_attempt)
+      LifecycleHistory.specialist_transition_id(history.lifecycle_id, transition.round, transition.planning_attempt, role, outcome, ordinal)
+    else
+      LifecycleHistory.transition_id(history.lifecycle_id, transition.round, transition.planning_attempt, role, outcome)
+    end
+  end
+
   defp event_payload(history, transition) do
     result = transition.result
     role = result["role"]
@@ -1184,14 +1312,7 @@ defmodule SymphonyElixir.LifecycleCoordinator do
       "kind" => transition.kind,
       "lifecycle_id" => history.lifecycle_id,
       "role_result_schema" => result["schema"],
-      "transition_id" =>
-        LifecycleHistory.transition_id(
-          history.lifecycle_id,
-          transition.round,
-          transition.planning_attempt,
-          elem(canonical_role(role), 1),
-          outcome
-        ),
+      "transition_id" => transition_id_for(history, transition),
       "role" => role,
       "from_role" => role,
       "outcome" => outcome,

@@ -79,7 +79,19 @@ defmodule SymphonyElixir.PromptBuilder do
     """
   end
 
-  defp human_guidance_section(:planner, %{planning_guidance: guidance}) when is_map(guidance) do
+  defp human_guidance_section(:planner, context) do
+    [planning_guidance_section(:planner, context), specialist_guidance_section(:planner, context)]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp human_guidance_section(role, context)
+       when role in [:reviewer, :implementer, :adversary, :archivist],
+       do: specialist_guidance_section(role, context)
+
+  defp human_guidance_section(_role, _lifecycle_context), do: ""
+
+  defp planning_guidance_section(:planner, %{planning_guidance: guidance}) when is_map(guidance) do
     """
 
     Host-accepted human planning guidance (authenticated authorization for one more bounded planning cycle):
@@ -93,7 +105,24 @@ defmodule SymphonyElixir.PromptBuilder do
     """
   end
 
-  defp human_guidance_section(_role, _lifecycle_context), do: ""
+  defp planning_guidance_section(_role, _lifecycle_context), do: ""
+
+  defp specialist_guidance_section(role, %{specialist_guidance: guidance})
+       when role in [:planner, :reviewer, :implementer, :adversary, :archivist] and
+              is_map(guidance) do
+    """
+
+    Host-accepted guidance for continuation of this role's prior await_human (authenticated context/evidence, not a permission grant):
+    #{format_context(guidance)}
+
+    This is a fresh invocation of your same specialist role at the same lifecycle position.
+    Continue only within your normal role, filesystem, tool, and runtime authority. The host requires
+    a "human_guidance_acknowledgment" object in your next result with "response_transition_id"
+    copied exactly from this guidance and a concise "assessment" of how the guidance is being applied.
+    """
+  end
+
+  defp specialist_guidance_section(_role, _lifecycle_context), do: ""
 
   defp reconciliation_section(handoff) do
     case handoff_reconciliation(handoff) do

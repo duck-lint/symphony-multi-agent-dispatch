@@ -95,6 +95,51 @@ defmodule SymphonyElixir.LifecycleEvidenceTest do
            ]
   end
 
+  test "revision evidence survives a Planner specialist pause and response" do
+    lifecycle_id = "life-revision-specialist-pause"
+    start = LifecycleHistory.start_event(lifecycle_id)
+    initial_plan = transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)
+    planner = revision_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)
+    reviewer = revision_event(lifecycle_id, "REVIEWER", "revise", "PLANNER", 1, 1)
+
+    reviewer =
+      Map.merge(reviewer, %{
+        "findings" => [%{"severity" => "blocking", "summary" => "The rejected plan omits the exact command.", "evidence" => ["review evidence"]}]
+      })
+
+    planner_pause =
+      transition_event(lifecycle_id, "PLANNER", "await_human", "AWAITING_HUMAN", 1, 2)
+      |> Map.merge(%{
+        "kind" => "escalation",
+        "transition_id" => LifecycleHistory.specialist_transition_id(lifecycle_id, 1, 2, :planner, "await_human", 1),
+        "human_question" => "Which constrained revision is authorized?"
+      })
+
+    response = %{
+      "schema" => LifecycleHistory.schema(),
+      "kind" => "specialist_response_accepted",
+      "lifecycle_id" => lifecycle_id,
+      "transition_id" => "#{planner_pause["transition_id"]}:response",
+      "boundary_transition_id" => planner_pause["transition_id"],
+      "role" => "PLANNER",
+      "round" => 1,
+      "planning_attempt" => 2,
+      "guidance" => %{
+        "decision" => "continue",
+        "text" => "Revise only the evidenced defect.",
+        "authorized_actions" => [],
+        "provenance" => %{"comment_id" => 913, "author_id" => 12_345}
+      }
+    }
+
+    assert {:ok, history} = LifecycleHistory.project([start, initial_plan, planner, reviewer, planner_pause, response])
+    projection = LifecycleEvidence.revision_projection(history)
+
+    assert projection.rejected_planner["transition_id"] == planner["transition_id"]
+    assert projection.reviewer["transition_id"] == reviewer["transition_id"]
+    assert hd(projection.reviewer_findings)["finding_ref"] == "#{reviewer["transition_id"]}:finding:0"
+  end
+
   test "revision projection rejects cross-round, cross-attempt, and cross-lifecycle pairs" do
     base = revision_event("life-current", "PLANNER", "plan_ready", "REVIEWER", 1, 1)
     reviewer = revision_event("life-current", "REVIEWER", "revise", "PLANNER", 1, 1)

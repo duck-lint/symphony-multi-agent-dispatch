@@ -172,6 +172,33 @@ defmodule SymphonyElixir.LifecycleProjectionBoundaryTest do
     end
   end
 
+  test "planning and specialist guidance compose for a resumed Planner" do
+    {history, _response} = resumed_planner_history()
+
+    history =
+      %{
+        history
+        | specialist_guidance: %{
+            "response_transition_id" => "projection-resumed-planner:r1:p4:PLANNER:await_human:response",
+            "text" => "Use the accepted bounded answer while revising the plan.",
+            "authorized_actions" => [],
+            "role" => "PLANNER"
+          }
+      }
+
+    context = Lifecycle.lifecycle_context(history)
+    handoff = LifecycleCoordinator.dispatch_handoff(history)
+    prompt = build_prompt(:planner, context, handoff)
+
+    assert context.planning_guidance["text"] == "Correct the reviewed defect."
+    assert context.specialist_guidance["response_transition_id"] == history.specialist_guidance["response_transition_id"]
+    assert handoff.planning_guidance["text"] == "Correct the reviewed defect."
+    assert handoff.specialist_guidance["text"] == "Use the accepted bounded answer while revising the plan."
+    assert prompt =~ "Host-accepted human planning guidance"
+    assert prompt =~ "Host-accepted guidance for continuation of this role's prior await_human"
+    assert prompt =~ history.specialist_guidance["response_transition_id"]
+  end
+
   defp resumed_planner_history do
     lifecycle_id = "projection-resumed-planner"
     start = LifecycleHistory.start_event(lifecycle_id)

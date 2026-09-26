@@ -916,6 +916,91 @@ defmodule SymphonyElixir.LifecycleCoordinatorTest do
     assert append_index < remove_auto_index
   end
 
+  test "specialist responses resume the same role and position across all specialist roles" do
+    lifecycle_id = "specialist-continuation"
+
+    for {role, events, outcome} <- specialist_continuation_cases(lifecycle_id) do
+      escalation = List.last(events)
+
+      response = %{
+        "id" => 900 + length(events),
+        "body" => human_response_body(lifecycle_id, escalation["transition_id"], "Continue only within the existing role boundary.", "specialist"),
+        "user" => %{"id" => 12_345, "login" => "configured-user"},
+        "created_at" => "2026-09-20T12:00:00Z",
+        "updated_at" => "2026-09-20T12:00:00Z",
+        "html_url" => "https://github.test/octo/repo/issues/42#issuecomment-#{900 + length(events)}"
+      }
+
+      Agent.update(Application.fetch_env!(:symphony_elixir, :lifecycle_fake_github_state), fn state ->
+        %{
+          state
+          | issue: %{state.issue | labels: ["symphony:state:awaiting-human", "symphony:role:#{RoleProfiles.role_name(role) |> String.downcase()}", "human-label"]},
+            comments: Enum.map(events, &%{"body" => LifecycleHistory.render(&1)}) ++ [response],
+            trace: []
+        }
+      end)
+
+      issue = %{github_issue() | labels: ["symphony:state:awaiting-human", "symphony:role:#{RoleProfiles.role_name(role) |> String.downcase()}", "human-label"]}
+      assert {:ok, %{history: resumed, issue: resumed_issue, lifecycle_context: context, handoff: handoff}} = LifecycleCoordinator.prepare_dispatch(issue)
+
+      assert resumed.current_role == role
+      assert {resumed.epoch, resumed.round, resumed.planning_cycle, resumed.planning_attempt, resumed.planning_cycle_attempt} == {0, 1, 1, 1, 1}
+      assert resumed.specialist_guidance["response_transition_id"] == "#{escalation["transition_id"]}:response"
+      assert context.specialist_guidance["text"] == "Continue only within the existing role boundary."
+      prompt = PromptBuilder.build_prompt(issue, role, %{lifecycle_context: context, handoff: handoff})
+      assert prompt =~ "Continue only within the existing role boundary."
+      assert handoff.specialist_guidance["role"] == RoleProfiles.role_name(role)
+      assert Enum.any?(resumed_issue.labels, &(&1 == "symphony:auto"))
+      assert Enum.any?(resumed_issue.labels, &(&1 == "symphony:role:#{RoleProfiles.role_name(role) |> String.downcase()}"))
+      refute Enum.any?(resumed_issue.labels, &(&1 == "symphony:state:awaiting-human"))
+      refute Enum.any?(resumed.events, &(&1["kind"] == "human_response_accepted"))
+
+      result = role_result(RoleProfiles.role_name(role), outcome, "The accepted guidance was applied within the existing role boundary.")
+      assert {:error, :missing_human_guidance_acknowledgment} = LifecycleCoordinator.commit_role_result(resumed_issue, role, result)
+
+      acknowledged =
+        Map.put(result, "human_guidance_acknowledgment", %{
+          "response_transition_id" => resumed.specialist_guidance["response_transition_id"],
+          "assessment" => "The guidance was considered without expanding role authority."
+        })
+
+      assert {:ok, %{history: advanced}} = LifecycleCoordinator.commit_role_result(resumed_issue, role, acknowledged)
+      refute advanced.specialist_guidance
+    end
+  end
+
+  defp specialist_continuation_cases(lifecycle_id) do
+    base = [
+      LifecycleHistory.start_event(lifecycle_id),
+      transition_event(lifecycle_id, "PM", "plan", "PLANNER", 1, 1)
+    ]
+
+    planner = base
+    reviewer = base ++ [transition_event(lifecycle_id, "PLANNER", "plan_ready", "REVIEWER", 1, 1)]
+    implementer = reviewer ++ [transition_event(lifecycle_id, "REVIEWER", "accept", "IMPLEMENTER", 1, 1)]
+    adversary = implementer ++ [transition_event(lifecycle_id, "IMPLEMENTER", "implementation_complete", "ADVERSARY", 1, 1)]
+    archivist = adversary ++ [transition_event(lifecycle_id, "ADVERSARY", "review_complete", "PM", 1, 1), transition_event(lifecycle_id, "PM", "converge", "ARCHIVIST", 1, 1)]
+
+    [
+      {:planner, planner ++ [specialist_escalation_event(lifecycle_id, :planner)], "plan_ready"},
+      {:reviewer, reviewer ++ [specialist_escalation_event(lifecycle_id, :reviewer)], "accept"},
+      {:implementer, implementer ++ [specialist_escalation_event(lifecycle_id, :implementer)], "implementation_complete"},
+      {:adversary, adversary ++ [specialist_escalation_event(lifecycle_id, :adversary)], "review_complete"},
+      {:archivist, archivist ++ [specialist_escalation_event(lifecycle_id, :archivist)], "archive_complete"}
+    ]
+  end
+
+  defp specialist_escalation_event(lifecycle_id, role) do
+    role_name = RoleProfiles.role_name(role)
+
+    transition_event(lifecycle_id, role_name, "await_human", "AWAITING_HUMAN", 1, 1)
+    |> Map.merge(%{
+      "kind" => "escalation",
+      "transition_id" => LifecycleHistory.specialist_transition_id(lifecycle_id, 1, 1, role, "await_human", 1),
+      "human_question" => "Which bounded action is authorized for #{role_name}?"
+    })
+  end
+
   defp github_issue do
     %Issue{
       id: "42",

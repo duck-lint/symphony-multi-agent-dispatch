@@ -16,6 +16,31 @@ defmodule SymphonyElixir.HumanResponseTest do
     assert response[:provenance]["content_digest"]
   end
 
+  test "accepts specialist scope and rejects a response for a different specialist boundary" do
+    specialist_escalation = "life-human:r8:p1:PLANNER:await_human"
+
+    response_comment =
+      comment(57, 7001, guidance: "Answer the exact planning question.", scope: "specialist")
+      |> Map.put("body", body(@lifecycle, specialist_escalation, "Answer the exact planning question.", [], "specialist"))
+
+    assert {:ok, response} =
+             HumanResponse.find([response_comment], @lifecycle, "specialist", specialist_escalation, [7001])
+
+    assert response["scope"] == "specialist"
+    assert response["authorized_actions"] == []
+    assert response[:provenance]["comment_id"] == 57
+
+    stale =
+      Map.put(
+        response_comment,
+        "body",
+        body(@lifecycle, "life-human:r8:p1:REVIEWER:await_human", "stale", [], "specialist")
+      )
+
+    assert {:error, :stale_human_response_target} =
+             HumanResponse.find([stale], @lifecycle, "specialist", specialist_escalation, [7001])
+  end
+
   test "does not trust comment text or an unauthorized author" do
     body = body(@lifecycle, @escalation, "authorized-looking text")
 
@@ -112,7 +137,7 @@ defmodule SymphonyElixir.HumanResponseTest do
   defp comment(id, author_id, opts) do
     guidance = Keyword.get(opts, :guidance, "Continue.")
     updated_at = Keyword.get(opts, :updated_at, "2026-09-20T12:00:00Z")
-    body = body(@lifecycle, @escalation, guidance, Keyword.get(opts, :authorized_actions, []))
+    body = body(@lifecycle, @escalation, guidance, Keyword.get(opts, :authorized_actions, []), Keyword.get(opts, :scope, "epoch"))
 
     %{
       "id" => id,
@@ -124,13 +149,13 @@ defmodule SymphonyElixir.HumanResponseTest do
     }
   end
 
-  defp body(lifecycle_id, escalation_id, guidance, authorized_actions \\ []) do
+  defp body(lifecycle_id, escalation_id, guidance, authorized_actions \\ [], scope \\ "epoch") do
     "<!-- symphony.human-response/v1\n" <>
       Jason.encode!(
         %{
           "schema" => HumanResponse.schema(),
           "lifecycle_id" => lifecycle_id,
-          "scope" => "epoch",
+          "scope" => scope,
           "target_transition_id" => escalation_id,
           "decision" => "continue",
           "guidance" => guidance,

@@ -76,19 +76,11 @@ defmodule SymphonyElixir.LifecycleEvidence do
   def revision_projection(_history), do: nil
 
   defp revision_projection_for_attempt(lifecycle_id, round, planning_attempt, events) do
-    case Enum.reverse(events) do
-      [%{"kind" => "planning_response_accepted", "boundary_transition_id" => boundary_id} | _] ->
-        reviewer = Enum.find(events, &(&1["transition_id"] == boundary_id))
-        planner_id = LifecycleHistory.transition_id(lifecycle_id, round, planning_attempt, :planner, "plan_ready")
-        planner = Enum.find(events, &(&1["transition_id"] == planner_id))
-        revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer)
-
-      [reviewer, planner | _older_events] ->
-        revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer)
-
-      _ ->
-        nil
-    end
+    planner_id = LifecycleHistory.transition_id(lifecycle_id, round, planning_attempt, :planner, "plan_ready")
+    reviewer_id = LifecycleHistory.transition_id(lifecycle_id, round, planning_attempt, :reviewer, "revise")
+    planner = Enum.find(events, &(&1["transition_id"] == planner_id))
+    reviewer = Enum.find(events, &(&1["transition_id"] == reviewer_id))
+    revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer)
   end
 
   defp revision_projection_for_pair(lifecycle_id, round, planning_attempt, planner, reviewer) do

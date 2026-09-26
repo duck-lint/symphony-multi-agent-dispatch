@@ -196,6 +196,17 @@ tool. When a valid response is accepted, the host opens a new work epoch in
 the same lifecycle, retaining the PM thread and issue workspace, resetting the
 epoch-local working-round budget, and preserving monotonic global rounds.
 
+For a Planner, Reviewer, Implementer, Adversary, or Archivist `await_human`, use
+`scope: "specialist"` and target the exact signed specialist escalation. A
+valid response appends `specialist_response_accepted`, restores `symphony:auto`
+and the same specialist role label, and dispatches a fresh worker of that role.
+It preserves the same lifecycle, workspace, epoch, round, planning cycle,
+planning attempt, and all existing handoff evidence. It does not invoke PM,
+reset a budget or horizon, or require a manual label change. The response
+becomes role-local guidance; the resumed specialist must acknowledge its exact
+response transition ID in its first result. Guidance is not a new permission
+surface and disappears when that specialist advances normally.
+
 ## 5. Branch-scoped workspace materialization and verification
 
 For a new issue workspace, the host creates the issue-specific directory and

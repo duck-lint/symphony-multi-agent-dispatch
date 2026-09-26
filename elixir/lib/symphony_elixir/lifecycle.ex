@@ -72,7 +72,8 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp validate_human_guidance_acknowledgment(_role, nil), do: :ok
 
-  defp validate_human_guidance_acknowledgment(role, acknowledgment) when role in [:pm, :planner] and is_map(acknowledgment) do
+  defp validate_human_guidance_acknowledgment(role, acknowledgment)
+       when role in [:pm, :planner, :reviewer, :implementer, :adversary, :archivist] and is_map(acknowledgment) do
     if Map.keys(acknowledgment) -- @human_guidance_acknowledgment_keys == [] and
          Enum.all?(@human_guidance_acknowledgment_keys, &Map.has_key?(acknowledgment, &1)) and
          is_binary(acknowledgment["response_transition_id"]) and
@@ -378,10 +379,16 @@ defmodule SymphonyElixir.Lifecycle do
           outcome_routes: outcome_routes(role, transition_context),
           temporal_interpretation: temporal_interpretation(role, predecessor),
           prerequisite_context: prerequisite,
-          human_guidance: if(role == :pm, do: Map.get(state, :human_guidance))
+          human_guidance: if(role == :pm, do: Map.get(state, :human_guidance)),
+          specialist_guidance:
+            if(role in [:planner, :reviewer, :implementer, :adversary, :archivist],
+              do: Map.get(state, :specialist_guidance)
+            )
         }
 
-        maybe_add_planning_guidance(context, role, Map.get(state, :planning_guidance))
+        context
+        |> maybe_add_planning_guidance(role, Map.get(state, :planning_guidance))
+        |> remove_nil_specialist_guidance()
 
       {:error, _reason} ->
         %{}
@@ -389,6 +396,11 @@ defmodule SymphonyElixir.Lifecycle do
   end
 
   def lifecycle_context(_state), do: %{}
+
+  defp remove_nil_specialist_guidance(%{specialist_guidance: nil} = context),
+    do: Map.delete(context, :specialist_guidance)
+
+  defp remove_nil_specialist_guidance(context), do: context
 
   defp maybe_add_planning_guidance(context, :planner, guidance) when is_map(guidance),
     do: Map.put(context, :planning_guidance, guidance)

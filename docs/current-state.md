@@ -174,7 +174,7 @@ cycle is continued after exhaustion.
 
 ## Runtime configuration and provenance
 
-### Human-guided continuation of epochs and planning cycles
+### Human-guided continuation of epochs, planning cycles, and specialist roles
 
 An instance configures the numeric GitHub user IDs permitted to authorize
 continuation. A response is accepted only from a matching authenticated GitHub
@@ -215,6 +215,16 @@ must acknowledge the accepted event by transition ID and reconcile the exact
 rejected plan and terminal Reviewer findings. The guidance remains available
 through that planning cycle, expires as active prompt state on Reviewer
 acceptance, and never enters Implementer, Adversary, or PM prompts.
+
+For a specialist `await_human`, the response uses `scope: "specialist"` and must target the exact persisted
+specialist escalation. The signed `specialist_response_accepted` event preserves the same lifecycle, issue
+workspace, epoch, working round, planning cycle, planning attempt, and all existing handoff evidence. The host
+restores automation with the same specialist role label and starts a fresh invocation of that role. It does not
+invoke PM, open an epoch, reset a planning cycle, or change any lifecycle budget. The resumed specialist receives
+the authenticated guidance and response transition ID, and its first committed result must acknowledge that exact
+ID. Guidance is role-local and expires when the specialist advances normally; it is not exposed to PM or later
+roles and does not expand filesystem, tool, runtime, or role authority. Repeated questions at one position receive
+ledger-derived non-budget ordinals for deterministic, non-conflicting transition IDs.
 
 Human guidance is evidence and authorization to reopen a bounded horizon;
 it does not grant role or project-write authority. Terminal planning-exhaustion

@@ -17,6 +17,7 @@ defmodule SymphonyElixir.LifecycleHistory do
     "escalation",
     "human_response_accepted",
     "planning_response_accepted",
+    "specialist_response_accepted",
     "blocked"
   ]
   @roles [:pm, :planner, :reviewer, :implementer, :adversary, :archivist]
@@ -37,6 +38,7 @@ defmodule SymphonyElixir.LifecycleHistory do
           epoch_start_round: non_neg_integer(),
           human_guidance: map() | nil,
           planning_guidance: map() | nil,
+          specialist_guidance: map() | nil,
           pm_phase: :initial | :returning | nil,
           completed_working_round?: boolean(),
           preceding_adversary_findings: list(),
@@ -125,6 +127,31 @@ defmodule SymphonyElixir.LifecycleHistory do
     "#{lifecycle_id}:r#{round}:p#{planning_attempt}:#{RoleProfiles.role_name(role)}:#{outcome}"
   end
 
+  @spec specialist_transition_id(String.t(), non_neg_integer(), non_neg_integer(), RoleProfiles.role(), String.t(), pos_integer()) :: String.t()
+  def specialist_transition_id(lifecycle_id, round, planning_attempt, role, outcome, ordinal)
+      when is_binary(lifecycle_id) and is_integer(round) and is_integer(planning_attempt) and
+             is_integer(ordinal) and ordinal > 0 do
+    base = transition_id(lifecycle_id, round, planning_attempt, role, outcome)
+    if ordinal == 1, do: base, else: "#{base}:q#{ordinal}"
+  end
+
+  @spec next_specialist_question_ordinal([event()], RoleProfiles.role(), non_neg_integer(), non_neg_integer()) :: pos_integer()
+  def next_specialist_question_ordinal(events, role, round, planning_attempt)
+      when is_list(events) and is_integer(round) and is_integer(planning_attempt) do
+    role_name = RoleProfiles.role_name(role)
+
+    count =
+      Enum.count(events, fn event ->
+        event["kind"] == "escalation" and
+          event["role"] == role_name and
+          event["outcome"] == "await_human" and
+          event["round"] == round and
+          event["planning_attempt"] == planning_attempt
+      end)
+
+    count + 1
+  end
+
   @spec render(event()) :: String.t()
   def render(event) when is_map(event) do
     signed_event = LifecycleIntegrity.sign(event)
@@ -155,6 +182,7 @@ defmodule SymphonyElixir.LifecycleHistory do
       epoch_start_round: 1,
       human_guidance: nil,
       planning_guidance: nil,
+      specialist_guidance: nil,
       pm_phase: nil,
       completed_working_round?: false,
       preceding_adversary_findings: [],
@@ -270,6 +298,25 @@ defmodule SymphonyElixir.LifecycleHistory do
       validate_guidance(event["guidance"])
     end
   end
+
+  defp validate_kind_fields(%{"kind" => "specialist_response_accepted"} = event) do
+    required = ~w(transition_id boundary_transition_id role round planning_attempt guidance)
+
+    with :ok <- require_fields(event, required),
+         :ok <- validate_transition_id_field(event["transition_id"]),
+         :ok <- validate_transition_id_field(event["boundary_transition_id"]),
+         :ok <- validate_non_negative_number(event["round"]),
+         :ok <- validate_non_negative_number(event["planning_attempt"]),
+         :ok <- validate_specialist_response_role(event["role"]) do
+      validate_guidance(event["guidance"])
+    end
+  end
+
+  defp validate_specialist_response_role(role)
+       when role in ["PLANNER", "REVIEWER", "IMPLEMENTER", "ADVERSARY", "ARCHIVIST"],
+       do: :ok
+
+  defp validate_specialist_response_role(_role), do: {:error, :invalid_specialist_response_role}
 
   defp require_fields(event, fields) do
     Enum.reduce_while(fields, :ok, fn key, :ok ->
@@ -423,6 +470,15 @@ defmodule SymphonyElixir.LifecycleHistory do
        do: apply_human_response_event(state, event)
 
   defp apply_event(
+         %{terminal: "awaiting-human", lifecycle_id: lifecycle_id} = state,
+         %{
+           "kind" => "specialist_response_accepted",
+           "lifecycle_id" => lifecycle_id
+         } = event
+       ),
+       do: apply_specialist_response_event(state, event)
+
+  defp apply_event(
          %{terminal: "non_converged", lifecycle_id: lifecycle_id} = state,
          %{"kind" => "planning_response_accepted", "lifecycle_id" => lifecycle_id} = event
        ),
@@ -474,6 +530,7 @@ defmodule SymphonyElixir.LifecycleHistory do
            | active?: false,
              terminal: String.downcase(terminal),
              transition_id: event["transition_id"],
+             specialist_guidance: nil,
              events: state.events ++ [event]
          }}
       else
@@ -489,13 +546,14 @@ defmodule SymphonyElixir.LifecycleHistory do
          true <- from_role == state.current_role or {:error, :lifecycle_from_role_mismatch},
          {:ok, :await_human} <- Lifecycle.transition(from_role, event["outcome"], transition_context(state, event)),
          :ok <- validate_event_position(state, from_role, event),
-         :ok <- validate_transition_id(event, from_role),
+         :ok <- validate_escalation_transition_id(state, event, from_role),
          "AWAITING_HUMAN" <- event["to_role"] do
       {:ok,
        %{
          state
          | active?: false,
            terminal: "awaiting-human",
+           specialist_guidance: nil,
            transition_id: event["transition_id"],
            events: state.events ++ [event]
        }}
@@ -537,6 +595,36 @@ defmodule SymphonyElixir.LifecycleHistory do
              transition_id: event["transition_id"],
              events: state.events ++ [event]
          }}
+    end
+  end
+
+  defp apply_specialist_response_event(%{active?: false, terminal: "awaiting-human"} = state, event) do
+    with {:ok, role} <- role_from_name(event["role"]),
+         true <- role in [:planner, :reviewer, :implementer, :adversary, :archivist] or {:error, :specialist_response_requires_specialist_role},
+         true <- state.current_role == role or {:error, :specialist_response_role_mismatch},
+         true <- event["boundary_transition_id"] == state.transition_id or {:error, :stale_specialist_response_escalation},
+         true <- (event["round"] == state.round and event["planning_attempt"] == state.planning_attempt) or {:error, :invalid_specialist_response_position},
+         true <- event["transition_id"] == "#{state.transition_id}:response" or {:error, :invalid_specialist_response_transition_id} do
+      guidance =
+        Map.merge(event["guidance"], %{
+          "response_transition_id" => event["transition_id"],
+          "boundary_transition_id" => event["boundary_transition_id"],
+          "role" => event["role"],
+          "continuation" => "specialist_await_human"
+        })
+
+      {:ok,
+       %{
+         state
+         | active?: true,
+           terminal: nil,
+           current_role: role,
+           specialist_guidance: guidance,
+           transition_id: event["transition_id"],
+           events: state.events ++ [event]
+       }}
+    else
+      {:error, _reason} = error -> error
     end
   end
 
@@ -655,6 +743,20 @@ defmodule SymphonyElixir.LifecycleHistory do
     end
   end
 
+  defp validate_escalation_transition_id(state, event, role) do
+    expected =
+      if role in [:planner, :reviewer, :implementer, :adversary, :archivist] do
+        ordinal = next_specialist_question_ordinal(state.events, role, event["round"], event["planning_attempt"])
+        specialist_transition_id(event["lifecycle_id"], event["round"], event["planning_attempt"], role, event["outcome"], ordinal)
+      else
+        transition_id(event["lifecycle_id"], event["round"], event["planning_attempt"], role, event["outcome"])
+      end
+
+    if event["transition_id"] == expected,
+      do: :ok,
+      else: {:error, {:invalid_transition_id, expected, event["transition_id"]}}
+  end
+
   defp validate_target(target, destination) when destination in @roles do
     expected = RoleProfiles.role_name(destination)
     if target == expected, do: :ok, else: {:error, {:invalid_lifecycle_target, expected, target}}
@@ -682,15 +784,16 @@ defmodule SymphonyElixir.LifecycleHistory do
         planning_guidance: nil,
         epoch_round: state.epoch_round + 1,
         pm_phase: :returning,
-        transition_id: event["transition_id"]
+        transition_id: event["transition_id"],
+        specialist_guidance: nil
     }
   end
 
   defp advance_state(state, :pm, "converge", event),
-    do: %{state | current_role: :archivist, transition_id: event["transition_id"]}
+    do: %{state | current_role: :archivist, specialist_guidance: nil, transition_id: event["transition_id"]}
 
   defp advance_state(state, :planner, "plan_ready", event),
-    do: %{state | current_role: :reviewer, transition_id: event["transition_id"]}
+    do: %{state | current_role: :reviewer, specialist_guidance: nil, transition_id: event["transition_id"]}
 
   defp advance_state(state, :reviewer, "revise", event),
     do: %{
@@ -698,14 +801,15 @@ defmodule SymphonyElixir.LifecycleHistory do
       | current_role: :planner,
         planning_attempt: state.planning_attempt + 1,
         planning_cycle_attempt: state.planning_cycle_attempt + 1,
+        specialist_guidance: nil,
         transition_id: event["transition_id"]
     }
 
   defp advance_state(state, :reviewer, "accept", event),
-    do: %{state | current_role: :implementer, planning_guidance: nil, transition_id: event["transition_id"]}
+    do: %{state | current_role: :implementer, planning_guidance: nil, specialist_guidance: nil, transition_id: event["transition_id"]}
 
   defp advance_state(state, :implementer, "implementation_complete", event),
-    do: %{state | current_role: :adversary, transition_id: event["transition_id"]}
+    do: %{state | current_role: :adversary, specialist_guidance: nil, transition_id: event["transition_id"]}
 
   defp advance_state(state, :adversary, "review_complete", event) do
     Map.merge(state, %{
@@ -713,7 +817,8 @@ defmodule SymphonyElixir.LifecycleHistory do
       pm_phase: :returning,
       completed_working_round?: true,
       preceding_adversary_findings: event["findings"],
-      transition_id: event["transition_id"]
+      transition_id: event["transition_id"],
+      specialist_guidance: nil
     })
   end
 
