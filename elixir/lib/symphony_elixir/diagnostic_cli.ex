@@ -111,7 +111,10 @@ defmodule SymphonyElixir.DiagnosticCLI do
 
   defp load_settings(path) do
     :ok = InstanceConfig.set_instance_config_file_path(path)
-    Config.settings()
+
+    with :ok <- Config.validate!() do
+      Config.settings()
+    end
   end
 
   defp select_worker("check", _opts, _settings), do: {:ok, nil}
