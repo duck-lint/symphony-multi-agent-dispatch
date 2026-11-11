@@ -57,8 +57,16 @@ defmodule SymphonyElixir.Workspace do
   @spec create_for_issue(map() | String.t() | nil, worker_host()) ::
           {:ok, Path.t()} | {:error, term()}
   def create_for_issue(issue_or_identifier, worker_host \\ nil) do
-    with {:ok, workspace} <- workspace_path_for_issue(workspace_key(issue_or_identifier), worker_host) do
-      create_selected_workspace(workspace, issue_context(issue_or_identifier), worker_host)
+    context = issue_context(issue_or_identifier)
+
+    try do
+      with {:ok, workspace} <- workspace_path_for_issue(workspace_key(issue_or_identifier), worker_host) do
+        create_selected_workspace(workspace, context, worker_host)
+      end
+    rescue
+      error in [ArgumentError, ErlangError, File.Error] ->
+        Logger.error("Workspace creation failed #{issue_log_context(context)} worker_host=#{worker_host_for_log(worker_host)} error=#{Exception.message(error)}")
+        {:error, error}
     end
   end
 
