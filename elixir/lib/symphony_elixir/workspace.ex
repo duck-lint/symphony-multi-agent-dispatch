@@ -125,7 +125,10 @@ defmodule SymphonyElixir.Workspace do
   defp normalize_remove_result({:error, reason, _path}), do: {:error, reason}
 
   defp remote_diagnostic_metadata_path(workspace, worker_host) do
-    metadata = protected_git_metadata_path(workspace)
+    # Match the literal path written by protect_remote_git_metadata/2.
+    # The remote .git pointer contains "/../" and is not normalized.
+    key = Path.basename(protected_git_metadata_path(workspace))
+    metadata = Path.join([workspace, "..", ".symphony-git-metadata", key])
 
     script =
       [
@@ -174,23 +177,21 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp create_selected_workspace(workspace, context, worker_host) do
-    try do
-      with :ok <- validate_workspace_path(workspace, worker_host),
-           {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host) do
-        case maybe_run_after_create_hook(workspace, context, created?, worker_host) do
-          :ok ->
-            {:ok, workspace}
+    with :ok <- validate_workspace_path(workspace, worker_host),
+         {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host) do
+      case maybe_run_after_create_hook(workspace, context, created?, worker_host) do
+        :ok ->
+          {:ok, workspace}
 
-          {:error, _reason} = error ->
-            cleanup_failed_new_workspace(workspace, created?, worker_host)
-            error
-        end
+        {:error, _reason} = error ->
+          cleanup_failed_new_workspace(workspace, created?, worker_host)
+          error
       end
-    rescue
-      error in [ArgumentError, ErlangError, File.Error] ->
-        Logger.error("Workspace creation failed #{issue_log_context(context)} worker_host=#{worker_host_for_log(worker_host)} error=#{Exception.message(error)}")
-        {:error, error}
     end
+  rescue
+    error in [ArgumentError, ErlangError, File.Error] ->
+      Logger.error("Workspace creation failed #{issue_log_context(context)} worker_host=#{worker_host_for_log(worker_host)} error=#{Exception.message(error)}")
+      {:error, error}
   end
 
   @doc """

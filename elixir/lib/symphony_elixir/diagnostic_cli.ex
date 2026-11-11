@@ -33,23 +33,24 @@ defmodule SymphonyElixir.DiagnosticCLI do
   @spec evaluate([String.t()]) :: {:ok, String.t()} | {:help, String.t()} | {:error, String.t()}
   def evaluate(args) do
     case OptionParser.parse(args, strict: @switches, aliases: [h: :help]) do
-      {opts, commands, []} ->
-        if Keyword.get(opts, :help, false) do
-          {:help, @usage}
-        else
-          case commands do
-            [command] when command in ["check", "provision", "verify", "destroy"] ->
-              evaluate_command(command, opts)
-
-            _ ->
-              {:error, @usage}
-          end
-        end
-
-      _ ->
-        {:error, @usage}
+      {opts, commands, []} -> evaluate_parsed(opts, commands)
+      _ -> {:error, @usage}
     end
   end
+
+  defp evaluate_parsed(opts, commands) do
+    if Keyword.get(opts, :help, false) do
+      {:help, @usage}
+    else
+      evaluate_selected_command(commands, opts)
+    end
+  end
+
+  defp evaluate_selected_command([command], opts)
+       when command in ["check", "provision", "verify", "destroy"],
+       do: evaluate_command(command, opts)
+
+  defp evaluate_selected_command(_commands, _opts), do: {:error, @usage}
 
   defp evaluate_command(command, opts) do
     with :ok <- validate_options(command, opts),
