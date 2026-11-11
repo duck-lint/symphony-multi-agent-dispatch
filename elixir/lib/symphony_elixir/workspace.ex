@@ -99,9 +99,10 @@ defmodule SymphonyElixir.Workspace do
   end
 
   @doc "Deletes only a named diagnostic workspace using normal workspace cleanup."
-  @spec remove_diagnostic(String.t(), worker_host()) :: {:ok, [String.t()]} | {:error, term()}
-  def remove_diagnostic(name, worker_host \\ nil)
+  @spec remove_diagnostic(String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def remove_diagnostic(name), do: remove_diagnostic(name, nil)
 
+  @spec remove_diagnostic(String.t(), worker_host()) :: {:ok, [String.t()]} | {:error, term()}
   def remove_diagnostic(name, nil) do
     with {:ok, workspace} <- existing_diagnostic_workspace(name, nil) do
       case remove(workspace, nil) do
@@ -124,8 +125,7 @@ defmodule SymphonyElixir.Workspace do
   defp normalize_remove_result({:error, reason, _path}), do: {:error, reason}
 
   defp remote_diagnostic_metadata_path(workspace, worker_host) do
-    key = Path.basename(protected_git_metadata_path(workspace))
-    metadata = Path.join([workspace, "..", ".symphony-git-metadata", key])
+    metadata = protected_git_metadata_path(workspace)
 
     script =
       [
