@@ -8,13 +8,13 @@ defmodule SymphonyElixir.AgentRunner do
 
   alias SymphonyElixir.{
     Config,
-    EnvironmentCapabilities,
     Lifecycle,
     PMThreadState,
     PromptBuilder,
     RoleProfiles,
     RoleRuntimePolicy,
-    Workspace
+    Workspace,
+    WorkspacePreparation
   }
 
   alias SymphonyElixir.Tracker.Issue
@@ -65,39 +65,30 @@ defmodule SymphonyElixir.AgentRunner do
 
     case Workspace.create_for_issue(issue, worker_host) do
       {:ok, workspace} ->
-        with {:ok, role_policy} <- RoleRuntimePolicy.for_role(role, workspace, worker_host: worker_host),
-             {:ok, boundary} <- Workspace.enforce_role_boundary(workspace, role_policy, worker_host) do
-          try do
-            with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host),
-                 {:ok, source_provenance} <- Workspace.verify_source_provenance(workspace, worker_host),
-                 {:ok, capability_report} <- EnvironmentCapabilities.verify(workspace, worker_host) do
-              send_worker_runtime_info(
-                codex_update_recipient,
-                issue,
-                worker_host,
-                workspace,
-                role_policy,
-                boundary,
-                source_provenance
-              )
+        WorkspacePreparation.with_prepared(workspace, role, issue, worker_host, fn prepared ->
+          send_worker_runtime_info(
+            codex_update_recipient,
+            issue,
+            worker_host,
+            workspace,
+            prepared.role_policy,
+            prepared.boundary,
+            prepared.source_provenance
+          )
 
-              run_role_turn(
-                workspace,
-                issue,
-                codex_update_recipient,
-                opts
-                |> Keyword.put(:environment_capabilities, capability_report)
-                |> Keyword.put(:source_provenance, source_provenance),
-                worker_host,
-                role,
-                role_profile,
-                role_policy
-              )
-            end
-          after
-            Workspace.run_after_run_hook(workspace, issue, worker_host)
-          end
-        end
+          run_role_turn(
+            workspace,
+            issue,
+            codex_update_recipient,
+            opts
+            |> Keyword.put(:environment_capabilities, prepared.environment_capabilities)
+            |> Keyword.put(:source_provenance, prepared.source_provenance),
+            worker_host,
+            role,
+            role_profile,
+            prepared.role_policy
+          )
+        end)
 
       {:error, reason} ->
         {:error, reason}

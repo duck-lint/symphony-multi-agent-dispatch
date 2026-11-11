@@ -87,6 +87,7 @@ The startup acknowledgement reflects the project's experimental risk posture. Ro
 | Document | Purpose |
 | --- | --- |
 | [Project onboarding](docs/project-onboarding.md) | Configure a project-scoped runtime and opt in work. |
+| [Diagnostic commissioning](docs/diagnostic-commissioning.md) | Provision and inspect project environments without issue opt-in. |
 | [Current runtime state](docs/current-state.md) | Authoritative operational details, live evidence, limitations, and deployment provenance. |
 | [Development and packaging](docs/development-and-packaging.md) | Maintainer build/validation procedure. |
 | [AGENTS.md](AGENTS.md) | Repository instructions and authority boundaries for contributors/agents. |

@@ -24,6 +24,23 @@ defmodule SymphonyElixir.CLI do
 
   @doc false
   @spec main([String.t()], (-> ensure_started_result())) :: no_return()
+  def main(["lab" | args], _ensure_all_started) do
+    # Diagnostic commands deliberately never start AgentRuntimeSupervisor.
+    case SymphonyElixir.DiagnosticCLI.evaluate(args) do
+      {:ok, report} ->
+        IO.puts(report)
+        System.halt(0)
+
+      {:help, message} ->
+        IO.puts(message)
+        System.halt(0)
+
+      {:error, message} ->
+        IO.puts(:stderr, message)
+        System.halt(1)
+    end
+  end
+
   def main(args, ensure_all_started) do
     case evaluate(args, runtime_deps(ensure_all_started)) do
       :ok ->

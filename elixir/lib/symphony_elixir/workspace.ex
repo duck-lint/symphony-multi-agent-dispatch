@@ -6,6 +6,9 @@ defmodule SymphonyElixir.Workspace do
   require Logger
   alias SymphonyElixir.{Config, PathSafety, SSH}
 
+  @diagnostic_directory ".symphony-diagnostics"
+  @diagnostic_id_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
+
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
   @remote_git_boundary_marker "__SYMPHONY_GIT_BOUNDARY__"
 
@@ -54,28 +57,141 @@ defmodule SymphonyElixir.Workspace do
   @spec create_for_issue(map() | String.t() | nil, worker_host()) ::
           {:ok, Path.t()} | {:error, term()}
   def create_for_issue(issue_or_identifier, worker_host \\ nil) do
-    issue_context = issue_context(issue_or_identifier)
+    context = issue_context(issue_or_identifier)
 
     try do
-      safe_id = workspace_key(issue_or_identifier)
-
-      with {:ok, workspace} <- workspace_path_for_issue(safe_id, worker_host),
-           :ok <- validate_workspace_path(workspace, worker_host),
-           {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host) do
-        case maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
-          :ok ->
-            {:ok, workspace}
-
-          {:error, _reason} = error ->
-            cleanup_failed_new_workspace(workspace, created?, worker_host)
-            error
-        end
+      with {:ok, workspace} <- workspace_path_for_issue(workspace_key(issue_or_identifier), worker_host) do
+        create_selected_workspace(workspace, context, worker_host)
       end
     rescue
       error in [ArgumentError, ErlangError, File.Error] ->
-        Logger.error("Workspace creation failed #{issue_log_context(issue_context)} worker_host=#{worker_host_for_log(worker_host)} error=#{Exception.message(error)}")
+        Logger.error("Workspace creation failed #{issue_log_context(context)} worker_host=#{worker_host_for_log(worker_host)} error=#{Exception.message(error)}")
         {:error, error}
     end
+  end
+
+  @doc """
+  Creates a named, isolated diagnostic workspace through the same materialization
+  and after_create hook used by production issue workspaces. A diagnostic name
+  never identifies a tracker issue. An existing workspace is never reused.
+  """
+  @spec create_for_diagnostic(String.t(), worker_host()) :: {:ok, Path.t()} | {:error, term()}
+  def create_for_diagnostic(name, worker_host \\ nil) do
+    with {:ok, workspace} <- diagnostic_workspace_path(name, worker_host),
+         :ok <- validate_diagnostic_target(workspace, worker_host),
+         {:ok, false} <- diagnostic_exists?(workspace, worker_host) do
+      create_selected_workspace(workspace, issue_context("diagnostic-" <> name), worker_host)
+    else
+      {:ok, true} -> {:error, :diagnostic_workspace_already_exists}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Resolves a previously provisioned diagnostic workspace without creating it."
+  @spec existing_diagnostic_workspace(String.t(), worker_host()) ::
+          {:ok, Path.t()} | {:error, term()}
+  def existing_diagnostic_workspace(name, worker_host \\ nil) do
+    with {:ok, workspace} <- diagnostic_workspace_path(name, worker_host),
+         :ok <- validate_diagnostic_target(workspace, worker_host),
+         :ok <- diagnostic_directory_exists?(workspace, worker_host) do
+      {:ok, workspace}
+    end
+  end
+
+  @doc "Deletes only a named diagnostic workspace using normal workspace cleanup."
+  @spec remove_diagnostic(String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def remove_diagnostic(name), do: remove_diagnostic(name, nil)
+
+  @spec remove_diagnostic(String.t(), worker_host()) :: {:ok, [String.t()]} | {:error, term()}
+  def remove_diagnostic(name, nil) do
+    with {:ok, workspace} <- existing_diagnostic_workspace(name, nil) do
+      case remove(workspace, nil) do
+        {:ok, removed} -> {:ok, removed}
+        {:error, reason, _path} -> {:error, reason}
+      end
+    end
+  end
+
+  def remove_diagnostic(name, worker_host) when is_binary(worker_host) do
+    with {:ok, workspace} <- existing_diagnostic_workspace(name, worker_host),
+         {:ok, metadata_path} <- remote_diagnostic_metadata_path(workspace, worker_host),
+         {:ok, removed} <- normalize_remove_result(remove(workspace, worker_host)),
+         :ok <- maybe_remove_remote_diagnostic_metadata(metadata_path, worker_host) do
+      {:ok, removed}
+    end
+  end
+
+  defp normalize_remove_result({:ok, removed}), do: {:ok, removed}
+  defp normalize_remove_result({:error, reason, _path}), do: {:error, reason}
+
+  defp remote_diagnostic_metadata_path(workspace, worker_host) do
+    # Match the literal path written by protect_remote_git_metadata/2.
+    # The remote .git pointer contains "/../" and is not normalized.
+    key = Path.basename(protected_git_metadata_path(workspace))
+    metadata = Path.join([workspace, "..", ".symphony-git-metadata", key])
+
+    script =
+      [
+        remote_shell_assign("workspace", workspace),
+        remote_shell_assign("metadata", metadata),
+        "if [ -f \"$workspace/.git\" ]; then",
+        "  test \"$(cat \"$workspace/.git\")\" = \"gitdir: $metadata\" || exit 51",
+        "  printf 'externalized\\n'",
+        "else",
+        "  printf 'not_externalized\\n'",
+        "fi"
+      ]
+      |> Enum.join("\n")
+
+    case SSH.run(worker_host, script, stderr_to_stdout: true) do
+      {:ok, {output, 0}} ->
+        case String.trim(output) do
+          "externalized" -> {:ok, metadata}
+          "not_externalized" -> {:ok, nil}
+          _ -> {:error, :invalid_diagnostic_metadata_report}
+        end
+
+      {:ok, {_output, _status}} ->
+        {:error, :unrecognized_diagnostic_git_metadata}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_remove_remote_diagnostic_metadata(nil, _worker_host), do: :ok
+
+  defp maybe_remove_remote_diagnostic_metadata(metadata, worker_host) do
+    script =
+      [
+        remote_shell_assign("metadata", metadata),
+        "rm -rf -- \"$metadata\""
+      ]
+      |> Enum.join("\n")
+
+    case SSH.run(worker_host, script, stderr_to_stdout: true) do
+      {:ok, {_output, 0}} -> :ok
+      {:ok, {_output, status}} -> {:error, {:diagnostic_metadata_cleanup_failed, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp create_selected_workspace(workspace, context, worker_host) do
+    with :ok <- validate_workspace_path(workspace, worker_host),
+         {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host) do
+      case maybe_run_after_create_hook(workspace, context, created?, worker_host) do
+        :ok ->
+          {:ok, workspace}
+
+        {:error, _reason} = error ->
+          cleanup_failed_new_workspace(workspace, created?, worker_host)
+          error
+      end
+    end
+  rescue
+    error in [ArgumentError, ErlangError, File.Error] ->
+      Logger.error("Workspace creation failed #{issue_log_context(context)} worker_host=#{worker_host_for_log(worker_host)} error=#{Exception.message(error)}")
+      {:error, error}
   end
 
   @doc """
@@ -509,6 +625,9 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  defp workspace_path_for_issue(@diagnostic_directory, _worker_host),
+    do: {:error, :reserved_diagnostic_workspace_namespace}
+
   defp workspace_path_for_issue(safe_id, nil) when is_binary(safe_id) do
     Config.local_workspace_root()
     |> Path.join(safe_id)
@@ -517,6 +636,102 @@ defmodule SymphonyElixir.Workspace do
 
   defp workspace_path_for_issue(safe_id, worker_host) when is_binary(safe_id) and is_binary(worker_host) do
     {:ok, Path.join(Config.settings!().workspace.root, safe_id)}
+  end
+
+  defp diagnostic_workspace_path(name, worker_host) when is_binary(name) do
+    if Regex.match?(@diagnostic_id_pattern, name) do
+      root =
+        case worker_host do
+          nil -> Config.local_workspace_root()
+          _ -> Config.settings!().workspace.root
+        end
+
+      workspace = Path.join([root, @diagnostic_directory, name])
+
+      case worker_host do
+        nil -> PathSafety.canonicalize(workspace)
+        _ -> {:ok, workspace}
+      end
+    else
+      {:error, :invalid_diagnostic_workspace_name}
+    end
+  end
+
+  defp diagnostic_workspace_path(_name, _worker_host), do: {:error, :invalid_diagnostic_workspace_name}
+
+  defp validate_diagnostic_target(workspace, nil) do
+    with :ok <- validate_workspace_path(workspace, nil),
+         {:ok, parent} <- PathSafety.canonicalize(Path.dirname(workspace)),
+         {:ok, root} <- PathSafety.canonicalize(Config.local_workspace_root()),
+         true <- parent == Path.join(root, @diagnostic_directory) do
+      :ok
+    else
+      false -> {:error, :unsafe_diagnostic_workspace_path}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_diagnostic_target(workspace, worker_host) when is_binary(worker_host) do
+    # Resolve existing symlinks on the worker before allowing any operation.
+    # A path inside a symlinked diagnostic namespace may escape the configured root.
+    script =
+      [
+        "set -eu",
+        remote_shell_assign("root", Config.settings!().workspace.root),
+        remote_shell_assign("workspace", workspace),
+        "root=$(realpath -m -- \"$root\")",
+        "workspace=$(realpath -m -- \"$workspace\")",
+        "case \"$workspace\" in \"$root/#{@diagnostic_directory}/\"*) ;; *) exit 42 ;; esac",
+        "test ! -L \"$root/#{@diagnostic_directory}\"",
+        "test ! -L \"$root/#{@diagnostic_directory}/.symphony-git-metadata\"",
+        "test ! -L \"$workspace\""
+      ]
+      |> Enum.join("\n")
+
+    case SSH.run(worker_host, script, stderr_to_stdout: true) do
+      {:ok, {_output, 0}} -> :ok
+      {:ok, {_output, _status}} -> {:error, :unsafe_diagnostic_workspace_path}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp diagnostic_exists?(workspace, nil) do
+    case File.lstat(workspace) do
+      {:ok, _stat} -> {:ok, true}
+      {:error, :enoent} -> {:ok, false}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp diagnostic_exists?(workspace, worker_host) when is_binary(worker_host) do
+    script =
+      [
+        remote_shell_assign("workspace", workspace),
+        "test -e \"$workspace\" || test -L \"$workspace\""
+      ]
+      |> Enum.join("\n")
+
+    case SSH.run(worker_host, script, stderr_to_stdout: true) do
+      {:ok, {_output, 0}} -> {:ok, true}
+      {:ok, {_output, 1}} -> {:ok, false}
+      {:ok, {_output, status}} -> {:error, {:diagnostic_workspace_lookup_failed, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp diagnostic_directory_exists?(workspace, nil) do
+    if File.dir?(workspace), do: :ok, else: {:error, :diagnostic_workspace_missing}
+  end
+
+  defp diagnostic_directory_exists?(workspace, worker_host) when is_binary(worker_host) do
+    script = [remote_shell_assign("workspace", workspace), "test -d \"$workspace\""] |> Enum.join("\n")
+
+    case SSH.run(worker_host, script, stderr_to_stdout: true) do
+      {:ok, {_output, 0}} -> :ok
+      {:ok, {_output, 1}} -> {:error, :diagnostic_workspace_missing}
+      {:ok, {_output, status}} -> {:error, {:diagnostic_workspace_lookup_failed, status}}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp local_workspace_path(workspace, relative_path, allow_current_directory?) do
