@@ -127,9 +127,15 @@ defmodule SymphonyElixir.DiagnosticCLI do
       |> Enum.uniq()
 
     case {Keyword.get(opts, :worker), configured} do
-      {nil, []} -> {:ok, nil}
-      {nil, [host]} -> {:ok, host}
-      {nil, _hosts} -> {:error, "multiple SSH workers configured; specify --worker <host>"}
+      {nil, []} ->
+        {:ok, nil}
+
+      {nil, [host]} ->
+        {:ok, host}
+
+      {nil, _hosts} ->
+        {:error, "multiple SSH workers configured; specify --worker <host>"}
+
       {host, hosts} when is_binary(host) ->
         if host in hosts, do: {:ok, host}, else: {:error, "worker is not listed in the selected instance configuration"}
     end
@@ -144,7 +150,8 @@ defmodule SymphonyElixir.DiagnosticCLI do
 
     case Workspace.create_for_diagnostic(name, worker_host) do
       {:ok, workspace} ->
-        {:ok, encode(%{status: "provisioned", config: path, run: name, workspace: workspace, worker_host: worker_host, note: "after_create executed if configured; role preparation has not been verified"})}
+        {:ok,
+         encode(%{status: "provisioned", config: path, run: name, workspace: workspace, worker_host: worker_host, note: "after_create executed if configured; role preparation has not been verified"})}
 
       {:error, reason} ->
         {:error, "diagnostic provisioning failed: #{inspect(reason)}"}
@@ -156,22 +163,23 @@ defmodule SymphonyElixir.DiagnosticCLI do
 
     with {:ok, role} <- parse_role(Keyword.fetch!(opts, :role)),
          {:ok, workspace} <- Workspace.existing_diagnostic_workspace(name, worker_host),
-         {:ok, result} <- WorkspacePreparation.with_prepared(workspace, role, "diagnostic-" <> name, worker_host, fn prepared ->
-           {:ok,
-            %{
-              status: "prepared",
-              config: path,
-              run: name,
-              workspace: workspace,
-              worker_host: worker_host,
-              role: RoleProfiles.role_name(role),
-              runtime_authority: RoleRuntimePolicy.snapshot(prepared.role_policy),
-              workspace_boundary: prepared.boundary,
-              source_provenance: prepared.source_provenance,
-              environment_capabilities: prepared.environment_capabilities,
-              note: "Checks ran under host authority; no Codex agent was launched. after_run hook runs after verification."
-            }}
-         end) do
+         {:ok, result} <-
+           WorkspacePreparation.with_prepared(workspace, role, "diagnostic-" <> name, worker_host, fn prepared ->
+             {:ok,
+              %{
+                status: "prepared",
+                config: path,
+                run: name,
+                workspace: workspace,
+                worker_host: worker_host,
+                role: RoleProfiles.role_name(role),
+                runtime_authority: RoleRuntimePolicy.snapshot(prepared.role_policy),
+                workspace_boundary: prepared.boundary,
+                source_provenance: prepared.source_provenance,
+                environment_capabilities: prepared.environment_capabilities,
+                note: "Checks ran under host authority; no Codex agent was launched. after_run hook runs after verification."
+              }}
+           end) do
       {:ok, encode(result)}
     else
       {:error, reason} -> {:error, "diagnostic verification failed: #{inspect(reason)}"}

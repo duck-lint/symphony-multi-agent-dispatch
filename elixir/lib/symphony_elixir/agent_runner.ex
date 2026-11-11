@@ -12,6 +12,7 @@ defmodule SymphonyElixir.AgentRunner do
     PMThreadState,
     PromptBuilder,
     RoleProfiles,
+    RoleRuntimePolicy,
     Workspace,
     WorkspacePreparation
   }

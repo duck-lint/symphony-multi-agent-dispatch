@@ -159,10 +159,12 @@ defmodule SymphonyElixir.Workspace do
   defp maybe_remove_remote_diagnostic_metadata(nil, _worker_host), do: :ok
 
   defp maybe_remove_remote_diagnostic_metadata(metadata, worker_host) do
-    script = [
-      remote_shell_assign("metadata", metadata),
-      "rm -rf -- \"$metadata\""
-    ] |> Enum.join("\n")
+    script =
+      [
+        remote_shell_assign("metadata", metadata),
+        "rm -rf -- \"$metadata\""
+      ]
+      |> Enum.join("\n")
 
     case SSH.run(worker_host, script, stderr_to_stdout: true) do
       {:ok, {_output, 0}} -> :ok
@@ -701,10 +703,12 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp diagnostic_exists?(workspace, worker_host) when is_binary(worker_host) do
-    script = [
-      remote_shell_assign("workspace", workspace),
-      "test -e \"$workspace\" || test -L \"$workspace\""
-    ] |> Enum.join("\n")
+    script =
+      [
+        remote_shell_assign("workspace", workspace),
+        "test -e \"$workspace\" || test -L \"$workspace\""
+      ]
+      |> Enum.join("\n")
 
     case SSH.run(worker_host, script, stderr_to_stdout: true) do
       {:ok, {_output, 0}} -> {:ok, true}

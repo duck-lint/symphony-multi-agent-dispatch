@@ -9,6 +9,7 @@ defmodule SymphonyElixir.DiagnosticCLITest do
     path = InstanceConfig.instance_config_file_path()
 
     assert {:ok, json} = DiagnosticCLI.evaluate(["check", "--config", path])
+
     assert %{"status" => "configuration_valid", "scope" => "schema_and_tracker_settings_only"} =
              Jason.decode!(json)
 
@@ -32,6 +33,7 @@ defmodule SymphonyElixir.DiagnosticCLITest do
 
     assert {:ok, issue_workspace} = Workspace.create_for_issue("ISSUE-900")
     assert File.exists?(Path.join(issue_workspace, "seed.txt"))
+
     assert {:error, :reserved_diagnostic_workspace_namespace} =
              Workspace.create_for_issue(".symphony-diagnostics")
 
