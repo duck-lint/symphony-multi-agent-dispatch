@@ -92,12 +92,74 @@ defmodule SymphonyElixir.Workspace do
 
   @doc "Deletes only a named diagnostic workspace using normal workspace cleanup."
   @spec remove_diagnostic(String.t(), worker_host()) :: {:ok, [String.t()]} | {:error, term()}
-  def remove_diagnostic(name, worker_host \\ nil) do
-    with {:ok, workspace} <- existing_diagnostic_workspace(name, worker_host) do
-      case remove(workspace, worker_host) do
+  def remove_diagnostic(name, worker_host \\ nil)
+
+  def remove_diagnostic(name, nil) do
+    with {:ok, workspace} <- existing_diagnostic_workspace(name, nil) do
+      case remove(workspace, nil) do
         {:ok, removed} -> {:ok, removed}
         {:error, reason, _path} -> {:error, reason}
       end
+    end
+  end
+
+  def remove_diagnostic(name, worker_host) when is_binary(worker_host) do
+    with {:ok, workspace} <- existing_diagnostic_workspace(name, worker_host),
+         {:ok, metadata_path} <- remote_diagnostic_metadata_path(workspace, worker_host),
+         {:ok, removed} <- normalize_remove_result(remove(workspace, worker_host)),
+         :ok <- maybe_remove_remote_diagnostic_metadata(metadata_path, worker_host) do
+      {:ok, removed}
+    end
+  end
+
+  defp normalize_remove_result({:ok, removed}), do: {:ok, removed}
+  defp normalize_remove_result({:error, reason, _path}), do: {:error, reason}
+
+  defp remote_diagnostic_metadata_path(workspace, worker_host) do
+    key = Path.basename(protected_git_metadata_path(workspace))
+    metadata = Path.join([workspace, "..", ".symphony-git-metadata", key])
+
+    script =
+      [
+        remote_shell_assign("workspace", workspace),
+        remote_shell_assign("metadata", metadata),
+        "if [ -f \"$workspace/.git\" ]; then",
+        "  test \"$(cat \"$workspace/.git\")\" = \"gitdir: $metadata\" || exit 51",
+        "  printf 'externalized\\n'",
+        "else",
+        "  printf 'not_externalized\\n'",
+        "fi"
+      ]
+      |> Enum.join("\n")
+
+    case SSH.run(worker_host, script, stderr_to_stdout: true) do
+      {:ok, {output, 0}} ->
+        case String.trim(output) do
+          "externalized" -> {:ok, metadata}
+          "not_externalized" -> {:ok, nil}
+          _ -> {:error, :invalid_diagnostic_metadata_report}
+        end
+
+      {:ok, {_output, _status}} ->
+        {:error, :unrecognized_diagnostic_git_metadata}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_remove_remote_diagnostic_metadata(nil, _worker_host), do: :ok
+
+  defp maybe_remove_remote_diagnostic_metadata(metadata, worker_host) do
+    script = [
+      remote_shell_assign("metadata", metadata),
+      "rm -rf -- \"$metadata\""
+    ] |> Enum.join("\n")
+
+    case SSH.run(worker_host, script, stderr_to_stdout: true) do
+      {:ok, {_output, 0}} -> :ok
+      {:ok, {_output, status}} -> {:error, {:diagnostic_metadata_cleanup_failed, status}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -610,6 +672,7 @@ defmodule SymphonyElixir.Workspace do
         "workspace=$(realpath -m -- \"$workspace\")",
         "case \"$workspace\" in \"$root/#{@diagnostic_directory}/\"*) ;; *) exit 42 ;; esac",
         "test ! -L \"$root/#{@diagnostic_directory}\"",
+        "test ! -L \"$root/#{@diagnostic_directory}/.symphony-git-metadata\"",
         "test ! -L \"$workspace\""
       ]
       |> Enum.join("\n")

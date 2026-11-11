@@ -33,11 +33,18 @@ defmodule SymphonyElixir.DiagnosticCLI do
   @spec evaluate([String.t()]) :: {:ok, String.t()} | {:help, String.t()} | {:error, String.t()}
   def evaluate(args) do
     case OptionParser.parse(args, strict: @switches, aliases: [h: :help]) do
-      {opts, _arguments, []} when is_list(opts) and Keyword.get(opts, :help, false) ->
-        {:help, @usage}
+      {opts, commands, []} ->
+        if Keyword.get(opts, :help, false) do
+          {:help, @usage}
+        else
+          case commands do
+            [command] when command in ["check", "provision", "verify", "destroy"] ->
+              evaluate_command(command, opts)
 
-      {opts, [command], []} when command in ["check", "provision", "verify", "destroy"] ->
-        evaluate_command(command, opts)
+            _ ->
+              {:error, @usage}
+          end
+        end
 
       _ ->
         {:error, @usage}
